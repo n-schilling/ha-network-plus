@@ -49,6 +49,10 @@ CONF_DRILL: Final = "drill"
 # entry: the gateway names the interface only for a while after the test
 CONF_SPEEDTEST_UPLINK: Final = "speedtest_uplink"
 
+# Event on the bus for every finished speed test; the logbook describes it,
+# and the speed test sensors write their new state in its context
+EVENT_SPEEDTEST: Final = "network_plus_speedtest"
+
 # Options: the link speed a WAN port should negotiate, in Mbit/s, by network group
 EXPECTED_SPEED_OPTIONS: Final[dict[str, str]] = {
     "WAN": "expected_speed_wan",

@@ -39,6 +39,8 @@ Download, upload and ping of the gateway's last speed test, and when it ran (dia
 
 The results are read; speed tests run in UniFi Network, by hand or on its schedule. With admin features, the button **"Run speed test"** starts one from Home Assistant (see below). A test that starts or finishes shows at once, not only with the next poll.
 
+Every finished test is also an entry of its own in the activity (the logbook), named with the result, for example `Gateway · ↓ 940 Mbit/s · ↑ 50 Mbit/s · 18 ms · WAN`. The four sensors change state in that entry's context, so the activity details of "Last speed test" show the test with its numbers under "What happened", and the activity list shows the result next to the state change.
+
 ### Public addresses
 
 Per uplink a sensor with the IPv4 and one with the IPv6 address of its port (diagnostic, disabled by default: an address in the recorder is your choice). Behind another router this is a private address. The event `public_ip_changed` fires when an address changes, with `family`, `address` and `previous`, so DynDNS or similar can follow. An address that appears or vanishes, for example while an uplink is down, is no change.

@@ -15,7 +15,7 @@ from homeassistant.const import (
     UnitOfInformation,
     UnitOfTime,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import NetworkConfigEntry
@@ -163,7 +163,26 @@ class LastTransitionSensor(NetworkPlusEntity, SensorEntity):
         return self.coordinator.data.last_transition
 
 
-class SpeedtestSensor(NetworkPlusEntity, SensorEntity):
+class SpeedtestResultEntity(NetworkPlusEntity):
+    """An entity of the last speed test.
+
+    A new result is written in the context of the event the coordinator
+    fired for it, so the logbook names the test, with its numbers, as the
+    cause of the state change.
+    """
+
+    _announced: datetime | None = None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        fresh = self.coordinator.speedtest_context
+        if fresh is not None and fresh[0] != self._announced:
+            self._announced = fresh[0]
+            self.async_set_context(fresh[1])
+        super()._handle_coordinator_update()
+
+
+class SpeedtestSensor(SpeedtestResultEntity, SensorEntity):
     """Download, upload or ping of the gateway's last speed test."""
 
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -194,7 +213,7 @@ class SpeedtestSensor(NetworkPlusEntity, SensorEntity):
         return _speedtest_uplink(self.coordinator.data)
 
 
-class SpeedtestLastRunSensor(NetworkPlusEntity, SensorEntity):
+class SpeedtestLastRunSensor(SpeedtestResultEntity, SensorEntity):
     """When the gateway last ran a speed test."""
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP

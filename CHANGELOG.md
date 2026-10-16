@@ -2,6 +2,12 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-10-16
+
+### Added
+
+- Every finished speed test is an entry in the activity (logbook) of its own, named with the result: gateway, download, upload, ping and the uplink. The four speed test sensors write the new result in that entry's context, so "What happened" in the activity details of a sensor names the test with its numbers.
+
 ## [0.4.0] - 2026-10-16
 
 ### Added

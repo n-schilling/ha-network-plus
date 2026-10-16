@@ -157,6 +157,15 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   gateway names later wins. The four speed test sensors carry the key and
   the name as attributes, so values measured over the backup do not pass for
   the main line's.
+- **Speed test in the activity:** a result that arrives while the integration
+  watches (not the one found at setup or after a restart) fires the bus event
+  `network_plus_speedtest` with the numbers and the uplink, in a fresh
+  `Context`. `logbook.py` describes the event for the logbook; the result is
+  in the entry's *name*, because the activity details render only the name
+  of a cause, not its message. The speed test sensors write the new result
+  in that context (`SpeedtestResultEntity`), so the logbook names the test
+  as the cause of their state change. The context is used once per run
+  time; Home Assistant drops it from later writes after a few seconds.
 
 ## The admin opt-in, the switch "Enforce backup uplink" and the button "Run speed test"
 

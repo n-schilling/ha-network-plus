@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, Context, HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     HomeAssistantError,
@@ -34,6 +34,7 @@ from .const import (
     CONF_DRILL,
     CONF_SPEEDTEST_UPLINK,
     DOMAIN,
+    EVENT_SPEEDTEST,
     ISSUE_ADMIN,
     ISSUE_LTE_LIMIT,
     ISSUE_UNREACHABLE,
@@ -48,6 +49,7 @@ from .model import (
     SWITCH_TOLERANCE,
     Drill,
     NetworkState,
+    Speedtest,
     UplinkEvent,
     brief_failover_candidate,
     detect_active_events,
@@ -137,6 +139,10 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self.drill = Drill.from_dict(entry.data.get(CONF_DRILL))
         # The uplink the last speed test ran over, by run time, as the entry stored it
         self._speedtest_uplink = _speedtest_uplink_from(entry.data.get(CONF_SPEEDTEST_UPLINK))
+        # The context of the event fired for the newest result, by run time; the
+        # speed test sensors write that result in it, so the logbook names the
+        # test as the cause of their state change
+        self.speedtest_context: tuple[datetime, Context] | None = None
         # Consecutive failed polls, for the repair issue "console unreachable"
         self._failed_polls = 0
         # LTE devices whose data limit is turned off (repair issue per device)
@@ -288,30 +294,55 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         reassign a result to whatever uplink is active then.
         """
         speedtest = state.speedtest
-        if speedtest is None or speedtest.last_run is None:
+        if speedtest is None or (last_run := speedtest.last_run) is None:
             return state
         uplink = speedtest.uplink
         remembered = self._speedtest_uplink
         if uplink is None:
-            if remembered is not None and remembered[0] == speedtest.last_run:
+            if remembered is not None and remembered[0] == last_run:
                 uplink = remembered[1]
             else:
                 uplink = state.active
         if uplink is None:
             return state
-        if (speedtest.last_run, uplink) != remembered:
-            self._speedtest_uplink = (speedtest.last_run, uplink)
+        speedtest = replace(speedtest, uplink=uplink)
+        if (last_run, uplink) != remembered:
+            if remembered is not None and remembered[0] != last_run:
+                # A result that arrived while the integration watched, not the
+                # one found at the first setup: tell the logbook
+                self._announce_speedtest(speedtest, last_run, uplink, state)
+            self._speedtest_uplink = (last_run, uplink)
             self.hass.config_entries.async_update_entry(
                 self.config_entry,
                 data={
                     **self.config_entry.data,
-                    CONF_SPEEDTEST_UPLINK: {
-                        "last_run": speedtest.last_run.isoformat(),
-                        "uplink": uplink,
-                    },
+                    CONF_SPEEDTEST_UPLINK: {"last_run": last_run.isoformat(), "uplink": uplink},
                 },
             )
-        return replace(state, speedtest=replace(speedtest, uplink=uplink))
+        return replace(state, speedtest=speedtest)
+
+    @callback
+    def _announce_speedtest(
+        self, speedtest: Speedtest, last_run: datetime, uplink: str, state: NetworkState
+    ) -> None:
+        """Fire the event for a finished speed test and keep its context for the sensors."""
+        named = state.uplinks.get(uplink)
+        context = Context()
+        self.hass.bus.async_fire(
+            EVENT_SPEEDTEST,
+            {
+                "entry_id": self.config_entry.entry_id,
+                "gateway": self.config_entry.title,
+                "download": speedtest.download,
+                "upload": speedtest.upload,
+                "ping": speedtest.ping,
+                "last_run": last_run.isoformat(),
+                "uplink": uplink.lower(),
+                "uplink_name": named.name if named else uplink,
+            },
+            context=context,
+        )
+        self.speedtest_context = (last_run, context)
 
     @callback
     def note_admin_permission(self, allowed: bool, reason: str = "") -> None:
