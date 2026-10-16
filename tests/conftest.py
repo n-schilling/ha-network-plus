@@ -14,7 +14,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant
 
-from custom_components.network_plus.api import find_gateway
+from custom_components.network_plus.api import NetworkError, find_gateway
 from custom_components.network_plus.const import DOMAIN
 
 MAC = "02:a1:b2:c3:d4:e5"
@@ -146,6 +146,8 @@ class FakeConsole:
         ]
         self.error: Exception | None = None
         self.clients_error: Exception | None = None
+        self.close_with_error = False
+        self.detached = 0
         self.listen_error: Exception | None = None
         self.messages: asyncio.Queue[Any] = asyncio.Queue()
         self.listening = asyncio.Event()
@@ -175,14 +177,25 @@ class FakeConsole:
             raise self.error
         return copy.deepcopy(self.configs)
 
-    async def listen(self, on_message: Callable[[dict[str, Any]], None]) -> None:
+    def detach(self) -> None:
+        self.detached += 1
+
+    async def listen(
+        self,
+        on_message: Callable[[dict[str, Any]], None],
+        on_connect: Callable[[], None] | None = None,
+    ) -> None:
         self.listen_calls += 1
         if self.listen_error:
             raise self.listen_error
         self.listening.set()
+        if on_connect is not None:
+            on_connect()
         while (message := await self.messages.get()) is not CLOSE:
             on_message(message)
         self.listening.clear()
+        if self.close_with_error:
+            raise NetworkError("connection dropped")
 
     async def push(self, hass: HomeAssistant, message: Any) -> None:
         """Send a websocket message and let Home Assistant handle it."""

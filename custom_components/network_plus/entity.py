@@ -11,7 +11,19 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import NetworkConfigEntry, NetworkCoordinator
-from .model import LteBackup, Uplink
+from .model import Gateway, LteBackup, Uplink
+
+
+def gateway_device_info(gateway: Gateway, name: str) -> DeviceInfo:
+    """Return the gateway's device, as the registry and the entities describe it."""
+    return DeviceInfo(
+        connections={(CONNECTION_NETWORK_MAC, format_mac(gateway.mac))},
+        identifiers={(DOMAIN, gateway.mac)},
+        name=name,
+        manufacturer="Ubiquiti",
+        model=gateway.model,
+        sw_version=gateway.version,
+    )
 
 
 class NetworkPlusEntity(CoordinatorEntity[NetworkCoordinator]):
@@ -30,14 +42,7 @@ class NetworkPlusEntity(CoordinatorEntity[NetworkCoordinator]):
         super().__init__(coordinator)
         gateway = coordinator.data.gateway
         self._attr_unique_id = f"{gateway.mac}_{key}"
-        self._attr_device_info = DeviceInfo(
-            connections={(CONNECTION_NETWORK_MAC, format_mac(gateway.mac))},
-            identifiers={(DOMAIN, gateway.mac)},
-            name=entry.title,
-            manufacturer="Ubiquiti",
-            model=gateway.model,
-            sw_version=gateway.version,
-        )
+        self._attr_device_info = gateway_device_info(gateway, entry.title)
 
 
 class UplinkEntity(NetworkPlusEntity):

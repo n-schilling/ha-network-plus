@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 import logging
 from typing import Any
 
@@ -12,6 +13,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import (
     NetworkAuthError,
@@ -22,7 +24,16 @@ from .api import (
     is_lte_device,
 )
 from .const import DOMAIN, RECONNECT_MAX, RECONNECT_MIN, UPDATE_INTERVAL
-from .model import NetworkState, UplinkEvent, detect_events, essentials, parse_state
+from .model import (
+    EVENT_FAILOVER,
+    EVENT_RESTORED,
+    NetworkState,
+    UplinkEvent,
+    detect_address_events,
+    detect_events,
+    essentials,
+    parse_state,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,6 +89,10 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._lte_raw: dict[str, Any] | None = None
         self._clients: list[dict[str, Any]] | None = None
         self._event_listeners: list[Callable[[UplinkEvent], None]] = []
+        # Last address seen per (uplink, family), for changes across an outage
+        self._known_addresses: dict[tuple[str, str], str] = {}
+        # When the active uplink was last seen changing
+        self._switch_seen_at: datetime | None = None
 
     async def _async_update_data(self) -> NetworkState:
         try:
@@ -130,11 +145,15 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
     @callback
     def _notify(self, state: NetworkState) -> None:
         """Pass the events between the last known state and ``state`` on."""
+        # The first state only seeds the known addresses
+        events = detect_address_events(self._known_addresses, state)
         # None before the first refresh, although the type says otherwise
         previous: NetworkState | None = self.data
-        if previous is None:
-            return
-        for event in detect_events(previous, state):
+        if previous is not None:
+            events = detect_events(previous, state, self._switch_seen_at) + events
+            if any(e.type in (EVENT_FAILOVER, EVENT_RESTORED) for e in events):
+                self._switch_seen_at = dt_util.utcnow()
+        for event in events:
             for listener in list(self._event_listeners):
                 listener(event)
 
@@ -157,13 +176,13 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
                 changed = True
         if not changed or not self._gateway_raw:
             return
+        # The poll decides whether the console is healthy; a push only refines
+        # a healthy state, so a failing poll is not hidden behind push data
+        if not self.last_update_success:
+            return
         state = self._build()
         previous: NetworkState | None = self.data
-        if (
-            previous is None
-            or not self.last_update_success
-            or essentials(state) != essentials(previous)
-        ):
+        if previous is None or essentials(state) != essentials(previous):
             self._notify(state)
             self.async_set_updated_data(state)
 
@@ -172,17 +191,21 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         delay = RECONNECT_MIN
         while True:
             try:
-                await self.client.listen(self._on_message)
+                await self.client.listen(self.handle_message, self._on_connect)
             except NetworkError as err:
-                _LOGGER.debug("Websocket not connected: %s", err)
+                _LOGGER.debug("Websocket ended: %s", err)
             else:
                 _LOGGER.debug("Websocket closed")
-                delay = RECONNECT_MIN
+            # A connection that stood is retried soon, however it ended;
+            # only failed attempts wait longer each time
+            worked = self.websocket_connected
             self.websocket_connected = False
+            if worked:
+                delay = RECONNECT_MIN
             await asyncio.sleep(delay)
-            delay = min(delay * 2, RECONNECT_MAX)
+            if not worked:
+                delay = min(delay * 2, RECONNECT_MAX)
 
     @callback
-    def _on_message(self, message: dict[str, Any]) -> None:
+    def _on_connect(self) -> None:
         self.websocket_connected = True
-        self.handle_message(message)

@@ -131,17 +131,28 @@ class NetworkClient:
             raise NetworkError("clients/active: unexpected answer")
         return [c for c in body if isinstance(c, dict)]
 
-    async def listen(self, on_message: Callable[[dict[str, Any]], None]) -> None:
+    def detach(self) -> None:
+        """Give the session's connector back; for a client that is no longer needed."""
+        self._session.detach()
+
+    async def listen(
+        self,
+        on_message: Callable[[dict[str, Any]], None],
+        on_connect: Callable[[], None] | None = None,
+    ) -> None:
         """Pass every websocket message to ``on_message`` until the connection ends.
 
-        Returns normally when an established connection closes; raises
-        ``NetworkError`` when no connection could be made.
+        ``on_connect`` is called once the connection stands. Returns normally
+        when an established connection closes; raises ``NetworkError`` when no
+        connection could be made.
         """
         if not self._logged_in:
             await self.login()
         url = f"wss://{self._host}/proxy/network/wss/s/{self._site}/events?clients=v2"
         try:
             async with self._session.ws_connect(url, heartbeat=HEARTBEAT) as ws:
+                if on_connect is not None:
+                    on_connect()
                 async for msg in ws:
                     if msg.type is not WSMsgType.TEXT:
                         continue

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from custom_components.network_plus.model import (
     EVENT_BRIEF_FAILOVER,
@@ -12,6 +12,7 @@ from custom_components.network_plus.model import (
     EVENT_UPLINK_DOWN,
     EVENT_UPLINK_UP,
     VpnClient,
+    detect_address_events,
     detect_events,
     essentials,
     parse_clients,
@@ -211,6 +212,7 @@ def test_latency_falls_back_to_uplink() -> None:
     raw = gateway()
     del raw["uptime_stats"]
     assert parse_state(raw, wan_configs()).latency == 15
+    assert parse_state(gateway(latency=0), wan_configs()).latency == 0  # 0 ms is a value
     raw = gateway(wan="offline", lte="offline", active="none")
     del raw["uplink"]
     assert parse_state(raw, wan_configs()).latency is None
@@ -264,6 +266,8 @@ def test_parse_lte_odd_values() -> None:
         False,
     )
     assert lte.usage_percent is None
+    # A limit the console keeps but does not enforce gives no share either
+    assert parse_lte(lte_device(limit=False)).usage_percent is None
     assert parse_lte(lte_device(connected="no")).connected is False
     assert parse_lte(lte_device(connected="maybe")).connected is None
     raw = lte_device(hard=0)
@@ -333,11 +337,19 @@ def test_essentials() -> None:
         assert essentials(base) != essentials(other)
 
 
-def test_public_ip_changed_events() -> None:
-    """A new address of a known uplink is an event per address family."""
+def test_address_events_across_an_outage() -> None:
+    """Address changes count against the last known address, also through a gap."""
+    known: dict[tuple[str, str], str] = {}
     before = parse_state(gateway(), wan_configs())
+    assert detect_address_events(known, before) == []  # the first state only seeds
+    assert known == {("WAN", "ipv4"): IPV4, ("WAN", "ipv6"): IPV6}
+    raw = gateway()
+    del raw["last_wan_interfaces"]
+    del raw["wan1"]
+    assert detect_address_events(known, parse_state(raw, wan_configs())) == []
+    assert known[("WAN", "ipv4")] == IPV4  # a vanished address is kept
     after = parse_state(gateway(ipv4="198.51.100.8", ipv6="2001:db8::8"), wan_configs())
-    events = detect_events(before, after)
+    events = detect_address_events(known, after)
     assert [e.type for e in events] == [EVENT_PUBLIC_IP_CHANGED, EVENT_PUBLIC_IP_CHANGED]
     assert events[0].attributes == {
         "uplink": "WAN",
@@ -348,10 +360,16 @@ def test_public_ip_changed_events() -> None:
     }
     assert events[1].attributes["family"] == "ipv6"
     assert events[1].attributes["address"] == "2001:db8::8"
-    # An address that appears or vanishes is no change
-    raw = gateway()
-    del raw["last_wan_interfaces"]
-    del raw["wan1"]
-    none = parse_state(raw, wan_configs())
-    assert detect_events(none, before) == []
-    assert detect_events(before, none) == []
+    assert detect_address_events(known, after) == []
+    # detect_events itself leaves addresses alone
+    assert detect_events(before, after) == []
+
+
+def test_brief_failover_not_for_a_seen_switch() -> None:
+    """A transition timestamp older than the last seen switch is no brief failover."""
+    before = parse_state(gateway(), wan_configs())
+    after = parse_state(gateway(transition=TRANSITION + 5000), wan_configs())
+    assert after.last_transition is not None
+    assert detect_events(before, after, after.last_transition + timedelta(seconds=1)) == []
+    events = detect_events(before, after, after.last_transition - timedelta(seconds=1))
+    assert [e.type for e in events] == [EVENT_BRIEF_FAILOVER]

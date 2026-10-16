@@ -60,6 +60,10 @@ class FakeSession:
         self.ws: FakeWebSocket | Exception = FakeWebSocket([])
         self.requests: list[tuple[str, str]] = []
         self.ws_urls: list[str] = []
+        self.detached = False
+
+    def detach(self) -> None:
+        self.detached = True
 
     @staticmethod
     @asynccontextmanager
@@ -200,8 +204,10 @@ async def test_listen_passes_messages() -> None:
         ]
     )
     received: list[dict[str, Any]] = []
-    await _client(session).listen(received.append)
+    connected: list[bool] = []
+    await _client(session).listen(received.append, lambda: connected.append(True))
     assert received == [message]
+    assert connected == [True]
     assert session.ws_urls == [f"wss://{HOST}/proxy/network/wss/s/default/events?clients=v2"]
 
 
@@ -211,8 +217,10 @@ async def test_listen_refused() -> None:
     session.login = [FakeResponse(200), FakeResponse(200)]
     session.ws = WSServerHandshakeError(MagicMock(), (), status=401)
     client = _client(session)
+    connected: list[bool] = []
     with pytest.raises(NetworkError, match="HTTP 401"):
-        await client.listen(lambda _m: None)
+        await client.listen(lambda _m: None, lambda: connected.append(True))
+    assert connected == []
     session.ws = ClientError("reset")
     with pytest.raises(NetworkError, match="reset"):
         await client.listen(lambda _m: None)
@@ -245,3 +253,10 @@ def test_find_lte() -> None:
     assert find_lte(devices[:2]) is None
     assert is_lte_device({"lte_connected": True})
     assert not is_lte_device(gateway())
+
+
+def test_detach() -> None:
+    """Detaching gives the session's connector back."""
+    session = FakeSession()
+    _client(session).detach()
+    assert session.detached is True

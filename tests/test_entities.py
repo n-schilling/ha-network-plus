@@ -14,7 +14,6 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.util import dt as dt_util
 
 from custom_components.network_plus.api import NetworkAuthError, NetworkError
 from custom_components.network_plus.const import DOMAIN
@@ -115,6 +114,9 @@ async def test_websocket_failover(
     await console.push(hass, sync(gateway(transition=TRANSITION + 2000), "device:update"))
     assert hass.states.get(BACKUP).state == "off"  # type: ignore[union-attr]
     assert hass.states.get(EVENT).attributes["event_type"] == "restored"  # type: ignore[union-attr]
+    # A transition timestamp that lags behind the seen switch is no brief failover
+    await console.push(hass, sync(gateway(transition=TRANSITION + 3000)))
+    assert hass.states.get(EVENT).attributes["event_type"] == "restored"  # type: ignore[union-attr]
 
 
 async def test_websocket_ignores_other_messages(
@@ -156,7 +158,11 @@ async def test_poll_failure_and_recovery(
     console: FakeConsole,
     freezer: FrozenDateTimeFactory,
 ) -> None:
-    """Without answer the entities are unavailable, not offline; the websocket brings them back."""
+    """Without answer the entities are unavailable, not offline; the next good poll brings them back.
+
+    A push while the poll fails is ignored: the poll decides whether the
+    console is healthy, so a failing poll is not hidden behind push data.
+    """
     console.error = NetworkError("down")
     freezer.tick(timedelta(seconds=61))
     async_fire_time_changed(hass)
@@ -164,7 +170,13 @@ async def test_poll_failure_and_recovery(
     assert hass.states.get(WAN).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
     assert hass.states.get(BACKUP).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
 
-    await console.push(hass, sync(gateway()))
+    await console.push(hass, sync(gateway(wan="offline")))
+    assert hass.states.get(WAN).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
+
+    console.error = None
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
     assert hass.states.get(WAN).state == "on"  # type: ignore[union-attr]
 
 
@@ -234,8 +246,9 @@ async def test_unknown_active_uplink(
 async def test_websocket_reconnects(
     hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
 ) -> None:
-    """A closed or refused websocket is connected again with growing delays."""
+    """Failed attempts wait longer each time; a connection that stood is retried soon."""
     coordinator = setup_entry.runtime_data.coordinator
+    assert coordinator.websocket_connected is True
     delays: list[float] = []
     real_sleep = asyncio.sleep
 
@@ -244,20 +257,24 @@ async def test_websocket_reconnects(
         await real_sleep(0)
 
     with patch("custom_components.network_plus.coordinator.asyncio.sleep", fake_sleep):
+        # The standing connection closes, then every attempt is refused
         console.listen_error = NetworkError("refused")
         console.messages.put_nowait(CLOSE)
-        for _ in range(20):
+        while console.listen_calls < 5:
             await real_sleep(0)
         assert coordinator.websocket_connected is False
+        assert delays[:4] == [5.0, 5.0, 10.0, 20.0]
+        # A connection stands again and drops with an error: retried soon
         console.listen_error = None
         await console.listening.wait()
+        assert coordinator.websocket_connected is True
+        console.close_with_error = True
+        calls = console.listen_calls
         console.messages.put_nowait(CLOSE)
-        await real_sleep(0)
-        await console.listening.wait()
-    assert delays[0] == 5.0
-    assert delays[1:3] == [10.0, 20.0]
+        while console.listen_calls == calls:
+            await real_sleep(0)
+    assert delays[-1] == 5.0
     assert max(delays) <= 300.0
-    assert console.listen_calls >= 3
 
 
 async def test_unload(hass: HomeAssistant, setup_entry: MockConfigEntry) -> None:
@@ -292,9 +309,9 @@ async def test_lte_sensors_and_device(hass: HomeAssistant, setup_entry: MockConf
     usage = hass.states.get(LTE_USAGE)
     assert usage.state == "0.0015"  # type: ignore[union-attr]
     assert usage.attributes["unit_of_measurement"] == "GB"  # type: ignore[union-attr]
-    assert usage.attributes["last_reset"].startswith(  # type: ignore[union-attr]
-        dt_util.now().strftime("%Y-%m-01T00:00:00")
-    )
+    # The console resets the counter monthly; the statistics take the drop as reset
+    assert usage.attributes["state_class"] == "total_increasing"  # type: ignore[union-attr]
+    assert "last_reset" not in usage.attributes  # type: ignore[union-attr]
     limit = hass.states.get(LTE_LIMIT)
     assert limit.state == "8.0"  # type: ignore[union-attr]
     assert limit.attributes["warning_bytes"] == 6_000_000_000  # type: ignore[union-attr]
@@ -336,12 +353,13 @@ async def test_enabled_address_and_signal_sensors(
 async def test_lte_without_limit(
     hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
 ) -> None:
-    """Without a data plan limit the share and the limit are unknown."""
+    """Without an enforced data plan limit the share and the limit are unknown."""
     console.devices[2] = lte_device(limit=False)
     config_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert _state(hass, LTE_PERCENT) == "0.01875"  # the limit is still set, only not enforced
+    assert _state(hass, LTE_PERCENT) == STATE_UNKNOWN
+    assert _state(hass, LTE_USAGE) == "0.0015"
     assert _state(hass, LTE_LIMIT) == STATE_UNKNOWN
     assert hass.states.get(LTE_LIMIT).attributes["warning_bytes"] is None  # type: ignore[union-attr]
 
@@ -409,7 +427,12 @@ async def test_lte_appears_later(
 async def test_public_ip_change_event(
     hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
 ) -> None:
-    """A new public address fires an event with the address."""
+    """A new public address fires an event, also when the address was gone in between."""
+    raw = gateway()
+    del raw["last_wan_interfaces"]
+    del raw["wan1"]
+    await console.push(hass, sync(raw))
+    assert _state(hass, EVENT) == STATE_UNKNOWN
     await console.push(hass, sync(gateway(ipv4="198.51.100.8")))
     event = hass.states.get(EVENT)
     assert event.attributes["event_type"] == "public_ip_changed"  # type: ignore[union-attr]

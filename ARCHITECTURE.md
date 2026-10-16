@@ -41,19 +41,27 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - `model.py` turns raw objects into frozen dataclasses (`NetworkState`,
   `Uplink`, `Speedtest`, `LteBackup`, `VpnClient`). Only named fields are
   taken over; raw objects never leave the coordinator.
-- `detect_events(old, new)` derives the events of the event entity from two
-  states: uplink down/up, failover/restored, a brief failover (the gateway's
-  transition timestamp moved while the active uplink stayed the preferred
-  one), and public address changes.
+- `detect_events(old, new, switch_seen_at)` derives the events of the event
+  entity from two states: uplink down/up, failover/restored, and a brief
+  failover (the gateway's transition timestamp moved while the active uplink
+  stayed the preferred one; a timestamp older than the last seen switch is
+  ignored, because it belongs to a failover that was seen).
+  `detect_address_events` compares the public addresses against the last
+  address known per uplink and family, so a change that passes through a
+  state without an address (PPPoE reconnect, outage) still fires.
 - **Push gate:** the websocket sends the gateway about once a second with
   latency values that differ nearly every time. A push updates the state only
   when `essentials()` changed: an uplink's online state or address, the active
   uplink, the transition timestamp, or the LTE connected/in-use flags. All
   numbers (latency, speed test, data usage, remote clients) come from the
   60-second poll. This keeps failovers immediate and the recorder quiet.
-- A failed poll makes the entities unavailable (`UpdateFailed`); the next push
-  or poll that succeeds brings them back. A rejected login starts the reauth
-  flow. A missing clients endpoint only makes the VPN sensor unknown.
+- A failed poll makes the entities unavailable (`UpdateFailed`); the next
+  poll that succeeds brings them back. Pushes are ignored while the last poll
+  failed: the poll decides whether the console is healthy, so a failing poll
+  is not hidden behind push data. A rejected login starts the reauth flow. A
+  missing clients endpoint only makes the VPN sensor unknown.
+- The websocket is reconnected with a delay that doubles per failed attempt
+  (5 s to 5 min) and resets as soon as a connection stood, however it ended.
 
 ## Entities and devices
 
@@ -78,8 +86,9 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   needs only a login, two GETs and the websocket.
 - **Own aiohttp session** via `async_create_clientsession` with
   `CookieJar(unsafe=True)`: the console's login is a cookie, and consoles are
-  usually addressed by IP, which the default jar rejects. The session is
-  cleaned up with the entry.
+  usually addressed by IP, which the default jar rejects. Home Assistant
+  detaches a session created during entry setup when the entry unloads; the
+  config flow detaches its own after each check.
 - **Certificate check is an option, on by default.** Consoles ship with a
   self-signed certificate; the option exists so nobody has to turn off
   verification globally.
@@ -95,9 +104,11 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - **Public addresses** live in disabled diagnostic sensors and in the
   `public_ip_changed` event, so storing an address in the recorder is the
   user's choice. An address that appears or vanishes is no change event.
-- **LTE usage is reported per calendar month** with `last_reset` at the start
-  of the month, because that is how the console counts. A data plan with
-  another billing day is not modelled.
+- **LTE usage** is the console's monthly counter, reported with state class
+  `total_increasing`: the statistics take the console's monthly drop as the
+  reset, whatever its time zone or billing day. The share of the data plan is
+  unknown while the limit is turned off in UniFi Network, even if the console
+  keeps the old limit value.
 - **Diagnostics** hold no address, user, password, MAC, uplink or client name
   and no times; tests assert it. The LTE runtime object contains the SIM PIN,
   APN credentials, IMEI and ICCID, which is why only named fields are parsed.

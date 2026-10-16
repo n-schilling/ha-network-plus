@@ -103,7 +103,7 @@ class LteBackup:
     @property
     def usage_percent(self) -> float | None:
         """Return how much of the data plan is used, in percent."""
-        if self.usage_bytes is None or not self.hard_limit:
+        if self.usage_bytes is None or not self.hard_limit or not self.limit_enabled:
             return None
         return self.usage_bytes / self.hard_limit * 100
 
@@ -204,6 +204,11 @@ def parse_state(
     by_key = {u.key: u for u in uplinks}
     active = _active(raw, by_key)
     uplink = _dict(raw.get("uplink"))
+    # The monitors' value of the active uplink; the gateway's own latency field
+    # measures something else while the traffic runs over LTE
+    latency = by_key[active].latency if active else None
+    if latency is None:
+        latency = _int(uplink.get("latency"))
 
     return NetworkState(
         gateway=Gateway(
@@ -215,7 +220,7 @@ def parse_state(
         uplinks=by_key,
         active=active,
         last_transition=_timestamp_ms(raw.get("last_lte_failover_transition_timestamp")),
-        latency=(by_key[active].latency if active else None) or _int(uplink.get("latency")),
+        latency=latency,
         speedtest=_speedtest(uplink),
         lte=parse_lte(lte_raw) if lte_raw is not None else None,
         vpn_clients=parse_clients(clients) if clients is not None else None,
@@ -269,8 +274,16 @@ def parse_clients(clients: list[Any]) -> tuple[VpnClient, ...]:
     return tuple(sorted(remote, key=lambda c: (c.type, c.name)))
 
 
-def detect_events(old: NetworkState, new: NetworkState) -> list[UplinkEvent]:
-    """Return what happened between two states, oldest first."""
+def detect_events(
+    old: NetworkState, new: NetworkState, switch_seen_at: datetime | None = None
+) -> list[UplinkEvent]:
+    """Return what happened between two states, oldest first.
+
+    ``switch_seen_at`` is when the last change of the active uplink was seen;
+    a transition timestamp from before that belongs to a failover that was
+    seen and is no brief failover. Address changes are found separately, see
+    ``detect_address_events``.
+    """
     events: list[UplinkEvent] = []
     for key, uplink in new.uplinks.items():
         before = old.uplinks.get(key)
@@ -287,23 +300,6 @@ def detect_events(old: NetworkState, new: NetworkState) -> list[UplinkEvent]:
                     {"uplink": key, "uplink_name": uplink.name},
                 )
             )
-        for family, previous, current in (
-            ("ipv4", before.ipv4, uplink.ipv4),
-            ("ipv6", before.ipv6, uplink.ipv6),
-        ):
-            if previous and current and previous != current:
-                events.append(
-                    UplinkEvent(
-                        EVENT_PUBLIC_IP_CHANGED,
-                        {
-                            "uplink": key,
-                            "uplink_name": uplink.name,
-                            "family": family,
-                            "address": current,
-                            "previous": previous,
-                        },
-                    )
-                )
 
     if old.active is not None and new.active is not None and old.active != new.active:
         events.append(
@@ -322,10 +318,43 @@ def detect_events(old: NetworkState, new: NetworkState) -> list[UplinkEvent]:
         and new.last_transition is not None
         and new.last_transition > old.last_transition
         and old.active == new.active == new.primary
+        and (switch_seen_at is None or new.last_transition > switch_seen_at)
     ):
         # The gateway switched to the backup and back between two states
         # this integration saw, for example while it was not connected.
         events.append(UplinkEvent(EVENT_BRIEF_FAILOVER, {"at": new.last_transition.isoformat()}))
+    return events
+
+
+def detect_address_events(
+    known: dict[tuple[str, str], str], state: NetworkState
+) -> list[UplinkEvent]:
+    """Return the address changes against the last known addresses, and remember the new ones.
+
+    ``known`` maps (uplink key, family) to the last address that was seen.
+    Comparing against it instead of the previous state catches a change that
+    passes through a state without an address, as after a PPPoE reconnect.
+    """
+    events: list[UplinkEvent] = []
+    for key, uplink in state.uplinks.items():
+        for family, current in (("ipv4", uplink.ipv4), ("ipv6", uplink.ipv6)):
+            if current is None:
+                continue
+            previous = known.get((key, family))
+            if previous is not None and previous != current:
+                events.append(
+                    UplinkEvent(
+                        EVENT_PUBLIC_IP_CHANGED,
+                        {
+                            "uplink": key,
+                            "uplink_name": uplink.name,
+                            "family": family,
+                            "address": current,
+                            "previous": previous,
+                        },
+                    )
+                )
+            known[(key, family)] = current
     return events
 
 

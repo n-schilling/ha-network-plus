@@ -43,8 +43,8 @@ If the console has an LTE backup device, it gets a device of its own below the g
 
 | Entity | What it shows |
 |---|---|
-| Sensor "LTE data used" | Share of the data plan used this month, in percent |
-| Sensor "LTE data this month" | Bytes used this calendar month, as the console counts them |
+| Sensor "LTE data used" | Share of the data plan used this month, in percent. Unknown while the limit is turned off |
+| Sensor "LTE data this month" | Bytes used this month, as the console counts them; the monthly drop is the reset |
 | Sensor "LTE data limit" (diagnostic) | The data plan set in UniFi Network; attribute `warning_bytes` is the warning limit. Unknown while the limit is turned off |
 | Sensor "LTE signal" (diagnostic, disabled) | RSSI in dBm; attribute `rsrp` |
 

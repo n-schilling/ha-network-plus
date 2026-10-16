@@ -56,6 +56,9 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             raise InvalidAuth from err
         except NetworkError as err:
             raise CannotConnect from err
+        finally:
+            # The session served one check; the entry gets its own
+            client.detach()
         if raw is None or not raw.get("mac"):
             raise NoGateway
         return parse_state(raw, []).gateway

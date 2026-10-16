@@ -13,8 +13,8 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import NetworkClient
-from .const import DOMAIN
 from .coordinator import NetworkConfigEntry, NetworkCoordinator, RuntimeData
+from .entity import gateway_device_info
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
 
@@ -39,15 +39,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> b
     coordinator = NetworkCoordinator(hass, entry, client, str(entry.unique_id))
     await coordinator.async_config_entry_first_refresh()
     # The gateway's device is created here so the LTE device can hang below it
-    gateway = coordinator.data.gateway
     device = dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id,
-        connections={(dr.CONNECTION_NETWORK_MAC, dr.format_mac(gateway.mac))},
-        identifiers={(DOMAIN, gateway.mac)},
-        name=entry.title,
-        manufacturer="Ubiquiti",
-        model=gateway.model,
-        sw_version=gateway.version,
+        **gateway_device_info(coordinator.data.gateway, entry.title),
     )
     entry.runtime_data = RuntimeData(
         client=client, coordinator=coordinator, gateway_device_id=device.id

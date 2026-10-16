@@ -32,6 +32,8 @@ async def test_user_creates_entry(hass: HomeAssistant, console: FakeConsole) -> 
     assert result["data"] == ENTRY_DATA
     assert result["result"].unique_id == MAC
     assert console.created_with[0] == (HOST, "homeassistant", "secret")
+    # The flow's session is given back; the entry's own session was created after it
+    assert console.detached == 1
 
 
 async def test_verify_ssl_defaults_to_on(hass: HomeAssistant, console: FakeConsole) -> None:
@@ -59,6 +61,7 @@ async def test_user_errors(
     console.error = None
     result = await hass.config_entries.flow.async_configure(result["flow_id"], ENTRY_DATA)
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert console.detached == 2
 
 
 async def test_user_no_gateway(hass: HomeAssistant, console: FakeConsole) -> None:

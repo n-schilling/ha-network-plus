@@ -15,7 +15,6 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.util import dt as dt_util
 
 from .coordinator import NetworkConfigEntry
 from .entity import (
@@ -305,13 +304,18 @@ class LteUsagePercentSensor(LteEntity, SensorEntity):
 
 
 class LteUsageSensor(LteEntity, SensorEntity):
-    """LTE data used this calendar month."""
+    """LTE data used this month.
+
+    The console resets the counter at its own month boundary; with
+    ``TOTAL_INCREASING`` the statistics take that drop as the reset instead
+    of a guessed ``last_reset``.
+    """
 
     _attr_device_class = SensorDeviceClass.DATA_SIZE
     _attr_native_unit_of_measurement = UnitOfInformation.BYTES
     _attr_suggested_unit_of_measurement = UnitOfInformation.GIGABYTES
     _attr_suggested_display_precision = 2
-    _attr_state_class = SensorStateClass.TOTAL
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_translation_key = "lte_usage"
 
     def __init__(self, entry: NetworkConfigEntry, lte: LteBackup) -> None:
@@ -323,11 +327,6 @@ class LteUsageSensor(LteEntity, SensorEntity):
         """Return the bytes used."""
         lte = self.lte
         return lte.usage_bytes if lte else None
-
-    @property
-    def last_reset(self) -> datetime:
-        """Return the start of the month: the console counts per calendar month."""
-        return dt_util.start_of_local_day(dt_util.now()).replace(day=1)
 
 
 class LteLimitSensor(LteEntity, SensorEntity):
