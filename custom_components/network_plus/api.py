@@ -122,6 +122,15 @@ class NetworkClient:
         configs = (w.get("configuration") for w in body if isinstance(w, dict))
         return [c for c in configs if isinstance(c, dict)]
 
+    async def get_active_clients(self) -> list[dict[str, Any]]:
+        """Return the active clients, Teleport and VPN clients included."""
+        body = await self._get(
+            f"/proxy/network/v2/api/site/{self._site}/clients/active?includeTeleport=true"
+        )
+        if not isinstance(body, list):
+            raise NetworkError("clients/active: unexpected answer")
+        return [c for c in body if isinstance(c, dict)]
+
     async def listen(self, on_message: Callable[[dict[str, Any]], None]) -> None:
         """Pass every websocket message to ``on_message`` until the connection ends.
 
@@ -158,6 +167,16 @@ def find_gateway(devices: list[dict[str, Any]], mac: str | None = None) -> dict[
         if mac is None or str(device.get("mac", "")).lower() == mac.lower():
             return device
     return None
+
+
+def is_lte_device(device: dict[str, Any]) -> bool:
+    """Return whether the runtime object is an LTE backup device."""
+    return "lte_state" in device or "lte_connected" in device
+
+
+def find_lte(devices: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the LTE backup device among the devices, if there is one."""
+    return next((d for d in devices if is_lte_device(d)), None)
 
 
 def _raise_for_status(resp: ClientResponse) -> None:

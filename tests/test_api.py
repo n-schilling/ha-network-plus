@@ -16,9 +16,11 @@ from custom_components.network_plus.api import (
     NetworkClient,
     NetworkError,
     find_gateway,
+    find_lte,
+    is_lte_device,
 )
 
-from .conftest import HOST, MAC, gateway
+from .conftest import HOST, MAC, gateway, lte_device
 
 
 class FakeResponse:
@@ -86,6 +88,7 @@ class FakeSession:
 
 DEVICES = "/proxy/network/api/s/default/stat/device"
 WANS = "/proxy/network/v2/api/site/default/wan/enriched-configuration"
+CLIENTS = "/proxy/network/v2/api/site/default/clients/active?includeTeleport=true"
 
 
 def _client(session: FakeSession) -> NetworkClient:
@@ -222,3 +225,23 @@ def test_find_gateway() -> None:
     assert find_gateway(devices) is devices[1]
     assert find_gateway(devices, MAC.upper()) is devices[1]
     assert find_gateway([{"type": "usw"}]) is None
+
+
+async def test_get_active_clients() -> None:
+    """The clients come as a list; anything else is an error."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    session.gets[CLIENTS] = [FakeResponse(200, [{"type": "WIRED"}, "junk"]), FakeResponse(200, {})]
+    client = _client(session)
+    assert await client.get_active_clients() == [{"type": "WIRED"}]
+    with pytest.raises(NetworkError, match="unexpected"):
+        await client.get_active_clients()
+
+
+def test_find_lte() -> None:
+    """The LTE device is the one with LTE fields."""
+    devices = [{"type": "usw"}, gateway(), lte_device()]
+    assert find_lte(devices) is devices[2]
+    assert find_lte(devices[:2]) is None
+    assert is_lte_device({"lte_connected": True})
+    assert not is_lte_device(gateway())

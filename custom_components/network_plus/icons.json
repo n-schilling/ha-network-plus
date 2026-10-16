@@ -26,6 +26,42 @@
       },
       "uplink_availability": {
         "default": "mdi:percent-outline"
+      },
+      "internet_latency": {
+        "default": "mdi:speedometer"
+      },
+      "speedtest_download": {
+        "default": "mdi:download"
+      },
+      "speedtest_upload": {
+        "default": "mdi:upload"
+      },
+      "speedtest_ping": {
+        "default": "mdi:timer-outline"
+      },
+      "speedtest_last_run": {
+        "default": "mdi:history"
+      },
+      "vpn_clients": {
+        "default": "mdi:vpn"
+      },
+      "uplink_ipv4": {
+        "default": "mdi:ip-network-outline"
+      },
+      "uplink_ipv6": {
+        "default": "mdi:ip-network-outline"
+      },
+      "lte_usage_percent": {
+        "default": "mdi:sim"
+      },
+      "lte_usage": {
+        "default": "mdi:chart-donut"
+      },
+      "lte_limit": {
+        "default": "mdi:sim-outline"
+      },
+      "lte_signal": {
+        "default": "mdi:signal-cellular-2"
       }
     }
   }

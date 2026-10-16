@@ -13,9 +13,16 @@ from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .api import NetworkAuthError, NetworkClient, NetworkError
+from .api import (
+    NetworkAuthError,
+    NetworkClient,
+    NetworkError,
+    find_gateway,
+    find_lte,
+    is_lte_device,
+)
 from .const import DOMAIN, RECONNECT_MAX, RECONNECT_MIN, UPDATE_INTERVAL
-from .model import NetworkState, UplinkEvent, detect_events, parse_state
+from .model import NetworkState, UplinkEvent, detect_events, essentials, parse_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,6 +36,7 @@ class RuntimeData:
 
     client: NetworkClient
     coordinator: NetworkCoordinator
+    gateway_device_id: str
 
 
 type NetworkConfigEntry = ConfigEntry[RuntimeData]
@@ -37,9 +45,12 @@ type NetworkConfigEntry = ConfigEntry[RuntimeData]
 class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
     """Keep the gateway's state; tell listeners what happened in between.
 
-    The websocket pushes the gateway's runtime object about once a second.
-    Polling runs only when nothing changed for a minute: it fills gaps while
-    the websocket reconnects and refreshes the uplink names.
+    The websocket pushes the runtime objects of the gateway and the LTE device
+    about once a second. A push updates the state only when something
+    essential changed (an uplink, the active uplink, an address, the LTE
+    state), so a failover shows at once. Everything else — latency, speed
+    test, data usage, remote clients, uplink names — is sampled by polling
+    every minute.
     """
 
     config_entry: NetworkConfigEntry
@@ -63,11 +74,14 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self.mac = mac
         self.websocket_connected = False
         self._configs: list[dict[str, Any]] = []
+        self._gateway_raw: dict[str, Any] = {}
+        self._lte_raw: dict[str, Any] | None = None
+        self._clients: list[dict[str, Any]] | None = None
         self._event_listeners: list[Callable[[UplinkEvent], None]] = []
 
     async def _async_update_data(self) -> NetworkState:
         try:
-            gateway = await self.client.get_gateway(self.mac)
+            devices = await self.client.get_devices()
             self._configs = await self.client.get_wan_configs()
         except NetworkAuthError as err:
             raise ConfigEntryAuthFailed(
@@ -79,11 +93,28 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
                 translation_key="update_failed",
                 translation_placeholders={"error": str(err)},
             ) from err
+        gateway = find_gateway(devices, self.mac)
         if gateway is None:
             raise UpdateFailed(translation_domain=DOMAIN, translation_key="gateway_missing")
-        state = parse_state(gateway, self._configs)
+        self._gateway_raw = gateway
+        self._lte_raw = find_lte(devices)
+        try:
+            self._clients = await self.client.get_active_clients()
+        except NetworkAuthError as err:
+            raise ConfigEntryAuthFailed(
+                translation_domain=DOMAIN, translation_key="invalid_auth"
+            ) from err
+        except NetworkError as err:
+            # A console without this endpoint still reports its uplinks;
+            # the remote clients are unknown then.
+            _LOGGER.debug("Active clients not readable: %s", err)
+            self._clients = None
+        state = self._build()
         self._notify(state)
         return state
+
+    def _build(self) -> NetworkState:
+        return parse_state(self._gateway_raw, self._configs, self._lte_raw, self._clients)
 
     @callback
     def async_add_event_listener(self, listener: Callable[[UplinkEvent], None]) -> CALLBACK_TYPE:
@@ -109,20 +140,32 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
 
     @callback
     def handle_message(self, message: dict[str, Any]) -> None:
-        """Take the gateway's runtime object from a websocket message."""
+        """Take the runtime objects of the gateway and the LTE device from a websocket message."""
         meta = message.get("meta")
         if not isinstance(meta, dict) or meta.get("message") not in DEVICE_MESSAGES:
             return
         data = message.get("data")
+        changed = False
         for raw in data if isinstance(data, list) else []:
-            if not isinstance(raw, dict) or str(raw.get("mac", "")).lower() != self.mac:
+            if not isinstance(raw, dict):
                 continue
-            if "last_wan_status" not in raw:
-                continue
-            state = parse_state(raw, self._configs)
-            if state != self.data or not self.last_update_success:
-                self._notify(state)
-                self.async_set_updated_data(state)
+            if str(raw.get("mac", "")).lower() == self.mac and "last_wan_status" in raw:
+                self._gateway_raw = raw
+                changed = True
+            elif is_lte_device(raw):
+                self._lte_raw = raw
+                changed = True
+        if not changed or not self._gateway_raw:
+            return
+        state = self._build()
+        previous: NetworkState | None = self.data
+        if (
+            previous is None
+            or not self.last_update_success
+            or essentials(state) != essentials(previous)
+        ):
+            self._notify(state)
+            self.async_set_updated_data(state)
 
     async def async_listen(self) -> None:
         """Keep the websocket connected for as long as the entry is loaded."""

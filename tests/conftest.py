@@ -18,7 +18,11 @@ from custom_components.network_plus.api import find_gateway
 from custom_components.network_plus.const import DOMAIN
 
 MAC = "02:a1:b2:c3:d4:e5"
+LTE_MAC = "02:a1:b2:c3:d4:e6"
 HOST = "192.0.2.1"
+IPV4 = "198.51.100.7"
+IPV6 = "2001:db8::7"
+SPEEDTEST_RUN = 1_700_000_000  # s
 USERNAME = "homeassistant"
 PASSWORD = "secret"
 ENTRY_DATA = {
@@ -48,22 +52,76 @@ def gateway(
     active: str = "WAN",
     transition: int = TRANSITION,
     mac: str = MAC,
+    latency: int = 14,
+    ipv4: str = IPV4,
+    ipv6: str = IPV6,
+    download: float = 949.0,
 ) -> dict[str, Any]:
     """Return the gateway's runtime object as stat/device and the websocket send it."""
     return {
         "mac": mac,
         "type": "udm",
-        "model": "UDMPROSE",
+        "model": "UDMPRO",
         "name": "Gateway",
-        "version": "5.1.33",
+        "version": "4.0.0",
         "last_wan_status": {"WAN": wan, "WAN_LTE_FAILOVER": lte},
-        "uplink": {"comment": active, "name": "eth8"},
+        "last_wan_interfaces": {"WAN": {"ip": ipv4, "alive": wan == "online"}},
+        "wan1": {"ipv6": ["fe80::1", ipv6], "ip": ipv4},
+        "uplink": {
+            "comment": active,
+            "name": "eth8",
+            "latency": 15,
+            "speedtest_lastrun": SPEEDTEST_RUN,
+            "speedtest_ping": 18,
+            "speedtest_status": "Success",
+            "xput_down": download,
+            "xput_up": 54.0,
+        },
         "uptime_stats": {
-            "WAN": {"availability": 100.0, "latency_average": 14},
+            "WAN": {"availability": 100.0, "latency_average": latency},
             "WAN_LTE_FAILOVER": {"availability": 99.5, "latency_average": 158},
         },
         "last_lte_failover_transition_timestamp": transition,
     }
+
+
+def lte_device(
+    *,
+    rx: int = 1_000_000,
+    tx: int = 500_000,
+    connected: Any = "yes",
+    in_use: Any = False,
+    hard: int | None = 8_000_000_000,
+    soft: int | None = 6_000_000_000,
+    limit: bool = True,
+    rssi: str = "-77",
+) -> dict[str, Any]:
+    """Return the LTE device's runtime object, secrets included as the console sends them."""
+    return {
+        "mac": LTE_MAC,
+        "type": "uap",
+        "model": "ULTEPRO",
+        "name": "LTE backup",
+        "version": "6.0.0",
+        "lte_state": "ready",
+        "lte_connected": connected,
+        "lte_failover": in_use,
+        "rx_bytes": rx,
+        "tx_bytes": tx,
+        "lte_hard_limit": hard,
+        "lte_soft_limit": soft,
+        "lte_data_limit_enabled": limit,
+        "lte_rssi": rssi,
+        "lte_rsrp": "-112",
+        "lte_sim_pin": "9876",
+        "lte_imei": "123456789012345",
+        "lte_networkoperator": "Carrier",
+    }
+
+
+def teleport_client(name: str = "Phone", since: int = 1_700_000_000) -> dict[str, Any]:
+    """Return a connected Teleport client as the console lists it."""
+    return {"type": "TELEPORT", "display_name": name, "assoc_time": since, "status": "online"}
 
 
 def sync(raw: dict[str, Any], message: str = "device:sync") -> dict[str, Any]:
@@ -78,9 +136,16 @@ class FakeConsole:
         self.devices: list[dict[str, Any]] = [
             gateway(),
             {"mac": "02:00:00:00:00:02", "type": "usw"},
+            lte_device(),
         ]
         self.configs = wan_configs()
+        self.clients: list[dict[str, Any]] = [
+            {"type": "WIRED", "display_name": "Desk"},
+            {"type": "WIRELESS", "display_name": "Laptop"},
+            teleport_client(),
+        ]
         self.error: Exception | None = None
+        self.clients_error: Exception | None = None
         self.listen_error: Exception | None = None
         self.messages: asyncio.Queue[Any] = asyncio.Queue()
         self.listening = asyncio.Event()
@@ -91,11 +156,19 @@ class FakeConsole:
         """Replace the gateway's runtime object."""
         self.devices[0] = raw
 
-    async def get_gateway(self, mac: str | None = None) -> dict[str, Any] | None:
+    async def get_devices(self) -> list[dict[str, Any]]:
         if self.error:
             raise self.error
-        found = find_gateway(self.devices, mac)
+        return copy.deepcopy(self.devices)
+
+    async def get_gateway(self, mac: str | None = None) -> dict[str, Any] | None:
+        found = find_gateway(await self.get_devices(), mac)
         return copy.deepcopy(found) if found else None
+
+    async def get_active_clients(self) -> list[dict[str, Any]]:
+        if self.clients_error:
+            raise self.clients_error
+        return copy.deepcopy(self.clients)
 
     async def get_wan_configs(self) -> list[dict[str, Any]]:
         if self.error:

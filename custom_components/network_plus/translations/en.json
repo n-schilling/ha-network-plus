@@ -72,7 +72,8 @@
               "restored": "Back on the preferred uplink",
               "brief_failover": "Brief failover",
               "uplink_down": "Uplink down",
-              "uplink_up": "Uplink up"
+              "uplink_up": "Uplink up",
+              "public_ip_changed": "Public address changed"
             }
           }
         }
@@ -95,6 +96,42 @@
       },
       "uplink_availability": {
         "name": "{uplink} availability"
+      },
+      "internet_latency": {
+        "name": "Internet latency"
+      },
+      "speedtest_download": {
+        "name": "Speed test download"
+      },
+      "speedtest_upload": {
+        "name": "Speed test upload"
+      },
+      "speedtest_ping": {
+        "name": "Speed test ping"
+      },
+      "speedtest_last_run": {
+        "name": "Last speed test"
+      },
+      "vpn_clients": {
+        "name": "VPN clients"
+      },
+      "uplink_ipv4": {
+        "name": "{uplink} IPv4"
+      },
+      "uplink_ipv6": {
+        "name": "{uplink} IPv6"
+      },
+      "lte_usage_percent": {
+        "name": "LTE data used"
+      },
+      "lte_usage": {
+        "name": "LTE data this month"
+      },
+      "lte_limit": {
+        "name": "LTE data limit"
+      },
+      "lte_signal": {
+        "name": "LTE signal"
       }
     }
   },

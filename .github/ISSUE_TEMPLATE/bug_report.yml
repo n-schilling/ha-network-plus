@@ -29,7 +29,7 @@ body:
     attributes:
       label: Gateway model and UniFi Network version
       description: From the UniFi console or the gateway's device page in Home Assistant.
-      placeholder: e.g. UDM SE, UniFi Network 10.0
+      placeholder: e.g. UDM Pro, UniFi Network 10.0
     validations:
       required: true
   - type: textarea

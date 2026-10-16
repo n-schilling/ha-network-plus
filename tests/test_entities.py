@@ -14,11 +14,23 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.util import dt as dt_util
 
 from custom_components.network_plus.api import NetworkAuthError, NetworkError
 from custom_components.network_plus.const import DOMAIN
 
-from .conftest import CLOSE, MAC, TRANSITION, FakeConsole, gateway, sync
+from .conftest import (
+    CLOSE,
+    IPV4,
+    IPV6,
+    LTE_MAC,
+    MAC,
+    TRANSITION,
+    FakeConsole,
+    gateway,
+    lte_device,
+    sync,
+)
 
 WAN = "binary_sensor.gateway_cable"
 LTE = "binary_sensor.gateway_lte"
@@ -26,6 +38,17 @@ BACKUP = "binary_sensor.gateway_backup_uplink_active"
 ACTIVE = "sensor.gateway_active_uplink"
 LAST = "sensor.gateway_last_lte_failover"
 EVENT = "event.gateway_internet"
+LATENCY = "sensor.gateway_internet_latency"
+VPN = "sensor.gateway_vpn_clients"
+LTE_PERCENT = "sensor.lte_backup_lte_data_used"
+LTE_USAGE = "sensor.lte_backup_lte_data_this_month"
+LTE_LIMIT = "sensor.lte_backup_lte_data_limit"
+
+
+def _state(hass: HomeAssistant, entity_id: str) -> str:
+    state = hass.states.get(entity_id)
+    assert state is not None, entity_id
+    return state.state
 
 
 async def test_entities_after_setup(hass: HomeAssistant, setup_entry: MockConfigEntry) -> None:
@@ -49,8 +72,8 @@ async def test_entities_after_setup(hass: HomeAssistant, setup_entry: MockConfig
     assert (dr.CONNECTION_NETWORK_MAC, MAC) in device.connections
     assert (device.manufacturer, device.model, device.sw_version) == (
         "Ubiquiti",
-        "UDMPROSE",
-        "5.1.33",
+        "UDMPRO",
+        "4.0.0",
     )
 
 
@@ -243,3 +266,175 @@ async def test_unload(hass: HomeAssistant, setup_entry: MockConfigEntry) -> None
     await hass.async_block_till_done()
     assert setup_entry.state is ConfigEntryState.NOT_LOADED
     assert hass.states.get(WAN).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
+
+
+async def test_speedtest_latency_and_vpn_sensors(
+    hass: HomeAssistant, setup_entry: MockConfigEntry
+) -> None:
+    """Speed test, latency on the active uplink and remote clients come from the first poll."""
+    assert _state(hass, LATENCY) == "14"
+    assert hass.states.get(LATENCY).attributes["uplink"] == "wan"  # type: ignore[union-attr]
+    assert _state(hass, "sensor.gateway_speed_test_download") == "949.0"
+    assert _state(hass, "sensor.gateway_speed_test_upload") == "54.0"
+    assert _state(hass, "sensor.gateway_speed_test_ping") == "18"
+    last = hass.states.get("sensor.gateway_last_speed_test")
+    assert last.state == "2023-11-14T22:13:20+00:00"  # type: ignore[union-attr]
+    assert last.attributes["status"] == "Success"  # type: ignore[union-attr]
+    vpn = hass.states.get(VPN)
+    assert vpn.state == "1"  # type: ignore[union-attr]
+    assert vpn.attributes["clients"] == ["Phone"]  # type: ignore[union-attr]
+    assert vpn.attributes["types"] == ["teleport"]  # type: ignore[union-attr]
+
+
+async def test_lte_sensors_and_device(hass: HomeAssistant, setup_entry: MockConfigEntry) -> None:
+    """The LTE device gets its own device below the gateway, with usage, share and limit."""
+    assert _state(hass, LTE_PERCENT) == "0.01875"
+    usage = hass.states.get(LTE_USAGE)
+    assert usage.state == "0.0015"  # type: ignore[union-attr]
+    assert usage.attributes["unit_of_measurement"] == "GB"  # type: ignore[union-attr]
+    assert usage.attributes["last_reset"].startswith(  # type: ignore[union-attr]
+        dt_util.now().strftime("%Y-%m-01T00:00:00")
+    )
+    limit = hass.states.get(LTE_LIMIT)
+    assert limit.state == "8.0"  # type: ignore[union-attr]
+    assert limit.attributes["warning_bytes"] == 6_000_000_000  # type: ignore[union-attr]
+    registry = er.async_get(hass)
+    signal = registry.async_get_entity_id("sensor", DOMAIN, f"{LTE_MAC}_signal")
+    assert signal is not None
+    assert registry.async_get(signal).disabled_by is er.RegistryEntryDisabler.INTEGRATION  # type: ignore[union-attr]
+    devices = dr.async_get(hass)
+    lte = devices.async_get_device_by_identifier((DOMAIN, LTE_MAC), setup_entry.entry_id)
+    gateway_device = devices.async_get_device_by_identifier((DOMAIN, MAC), setup_entry.entry_id)
+    assert lte is not None and gateway_device is not None
+    assert lte.via_device_id == gateway_device.id
+    assert (lte.name, lte.model, lte.sw_version) == ("LTE backup", "ULTEPRO", "6.0.0")
+
+
+async def test_enabled_address_and_signal_sensors(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """Addresses and the LTE signal show once their sensors are enabled."""
+    config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    for unique_id in (f"{MAC}_ipv4_wan", f"{MAC}_ipv6_wan", f"{LTE_MAC}_signal"):
+        registry.async_get_or_create(
+            "sensor", DOMAIN, unique_id, config_entry=config_entry, disabled_by=None
+        )
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    ids = {
+        key: str(registry.async_get_entity_id("sensor", DOMAIN, key))
+        for key in (f"{MAC}_ipv4_wan", f"{MAC}_ipv6_wan", f"{LTE_MAC}_signal")
+    }
+    assert _state(hass, ids[f"{MAC}_ipv4_wan"]) == IPV4
+    assert _state(hass, ids[f"{MAC}_ipv6_wan"]) == IPV6
+    signal = hass.states.get(ids[f"{LTE_MAC}_signal"])
+    assert signal.state == "-77"  # type: ignore[union-attr]
+    assert signal.attributes["rsrp"] == -112  # type: ignore[union-attr]
+
+
+async def test_lte_without_limit(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """Without a data plan limit the share and the limit are unknown."""
+    console.devices[2] = lte_device(limit=False)
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert _state(hass, LTE_PERCENT) == "0.01875"  # the limit is still set, only not enforced
+    assert _state(hass, LTE_LIMIT) == STATE_UNKNOWN
+    assert hass.states.get(LTE_LIMIT).attributes["warning_bytes"] is None  # type: ignore[union-attr]
+
+
+async def test_push_with_numbers_only_waits_for_poll(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Changed latency or usage over the websocket shows with the next poll, not at once."""
+    await console.push(hass, sync(gateway(latency=99, download=10.0)))
+    assert _state(hass, LATENCY) == "14"
+    assert _state(hass, "sensor.gateway_speed_test_download") == "949.0"
+    console.set_gateway(gateway(latency=99, download=10.0))
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert _state(hass, LATENCY) == "99"
+    assert _state(hass, "sensor.gateway_speed_test_download") == "10.0"
+
+
+async def test_speedtest_missing(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A gateway without speed test results gives unknown sensors."""
+    raw = gateway()
+    raw["uplink"] = {"comment": "WAN", "latency": 15}
+    console.set_gateway(raw)
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert _state(hass, "sensor.gateway_speed_test_download") == STATE_UNKNOWN
+    assert _state(hass, "sensor.gateway_last_speed_test") == STATE_UNKNOWN
+    assert hass.states.get("sensor.gateway_last_speed_test").attributes["status"] is None  # type: ignore[union-attr]
+
+
+async def test_push_of_lte_state(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A changed LTE state over the websocket is applied at once, with its numbers."""
+    await console.push(hass, sync(lte_device(rx=2_000_000, connected="no")))
+    assert _state(hass, LTE_PERCENT) == "0.03125"
+    # Numbers alone wait for the poll
+    await console.push(hass, sync(lte_device(rx=3_000_000, connected="no")))
+    assert _state(hass, LTE_PERCENT) == "0.03125"
+
+
+async def test_lte_appears_later(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """An LTE device adopted later gets its entities without a reload."""
+    console.devices = console.devices[:2]
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(LTE_PERCENT) is None
+    await console.push(hass, sync(lte_device()))
+    assert _state(hass, LTE_PERCENT) == "0.01875"
+
+
+async def test_public_ip_change_event(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A new public address fires an event with the address."""
+    await console.push(hass, sync(gateway(ipv4="198.51.100.8")))
+    event = hass.states.get(EVENT)
+    assert event.attributes["event_type"] == "public_ip_changed"  # type: ignore[union-attr]
+    assert event.attributes["family"] == "ipv4"  # type: ignore[union-attr]
+    assert event.attributes["address"] == "198.51.100.8"  # type: ignore[union-attr]
+    assert event.attributes["previous"] == IPV4  # type: ignore[union-attr]
+
+
+async def test_clients_not_readable(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Without the clients endpoint the VPN sensor is unknown; the uplinks stay available."""
+    console.clients_error = NetworkError("no such endpoint")
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert _state(hass, VPN) == STATE_UNKNOWN
+    assert hass.states.get(VPN).attributes["clients"] == []  # type: ignore[union-attr]
+    assert _state(hass, WAN) == "on"
+    console.clients_error = NetworkAuthError("no")
+    freezer.tick(timedelta(seconds=61))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [f["context"]["source"] for f in flows] == ["reauth"]

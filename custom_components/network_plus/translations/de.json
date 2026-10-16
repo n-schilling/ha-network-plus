@@ -72,7 +72,8 @@
               "restored": "Zurück auf der bevorzugten Leitung",
               "brief_failover": "Kurze Umschaltung",
               "uplink_down": "Leitung ausgefallen",
-              "uplink_up": "Leitung wieder da"
+              "uplink_up": "Leitung wieder da",
+              "public_ip_changed": "Öffentliche Adresse geändert"
             }
           }
         }
@@ -95,6 +96,42 @@
       },
       "uplink_availability": {
         "name": "{uplink} Verfügbarkeit"
+      },
+      "internet_latency": {
+        "name": "Internet-Latenz"
+      },
+      "speedtest_download": {
+        "name": "Speedtest Download"
+      },
+      "speedtest_upload": {
+        "name": "Speedtest Upload"
+      },
+      "speedtest_ping": {
+        "name": "Speedtest Ping"
+      },
+      "speedtest_last_run": {
+        "name": "Letzter Speedtest"
+      },
+      "vpn_clients": {
+        "name": "VPN-Clients"
+      },
+      "uplink_ipv4": {
+        "name": "{uplink} IPv4"
+      },
+      "uplink_ipv6": {
+        "name": "{uplink} IPv6"
+      },
+      "lte_usage_percent": {
+        "name": "LTE-Daten verbraucht"
+      },
+      "lte_usage": {
+        "name": "LTE-Daten diesen Monat"
+      },
+      "lte_limit": {
+        "name": "LTE-Datenlimit"
+      },
+      "lte_signal": {
+        "name": "LTE-Signal"
       }
     }
   },
