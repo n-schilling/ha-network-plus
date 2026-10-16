@@ -16,6 +16,7 @@ from custom_components.network_plus.api import (
     NetworkAuthError,
     NetworkClient,
     NetworkError,
+    NetworkPermissionError,
     find_gateway,
     find_lte_devices,
     is_lte_device,
@@ -25,12 +26,15 @@ from .conftest import HOST, MAC, gateway, lte_device
 
 
 class FakeResponse:
-    """An aiohttp response with a status and a JSON body."""
+    """An aiohttp response with a status, a JSON body and headers."""
 
-    def __init__(self, status: int, body: Any = None, path: str = "/") -> None:
+    def __init__(
+        self, status: int, body: Any = None, path: str = "/", headers: dict[str, str] | None = None
+    ) -> None:
         self.status = status
         self._body = body
         self.url = MagicMock(path=path)
+        self.headers = headers or {}
 
     async def json(self, content_type: str | None = None) -> Any:
         if isinstance(self._body, Exception):
@@ -58,6 +62,8 @@ class FakeSession:
     def __init__(self) -> None:
         self.login: list[FakeResponse | Exception] = []
         self.gets: dict[str, list[FakeResponse | Exception]] = {}
+        self.puts: dict[str, list[FakeResponse | Exception]] = {}
+        self.writes: list[tuple[str, str, Any, dict[str, str]]] = []
         self.ws: FakeWebSocket | Exception = FakeWebSocket([])
         self.requests: list[tuple[str, str]] = []
         self.ws_urls: list[str] = []
@@ -80,9 +86,15 @@ class FakeSession:
         return self._answer(self.login.pop(0))
 
     def get(self, url: str, **kwargs: Any) -> Any:
-        self.requests.append(("GET", url))
+        return self.request("GET", url, **kwargs)
+
+    def request(self, method: str, url: str, **kwargs: Any) -> Any:
+        self.requests.append((method, url))
         path = url.removeprefix(f"https://{HOST}")
-        return self._answer(self.gets[path].pop(0))
+        if method == "GET":
+            return self._answer(self.gets[path].pop(0))
+        self.writes.append((method, url, kwargs.get("json"), kwargs.get("headers") or {}))
+        return self._answer(self.puts[path].pop(0))
 
     @asynccontextmanager
     async def ws_connect(self, url: str, **kwargs: Any) -> AsyncIterator[FakeWebSocket]:
@@ -312,3 +324,69 @@ async def test_late_rejection_does_not_log_in_again() -> None:
     client = _client(session)
     assert await asyncio.gather(client.get_devices(), client.get_devices()) == [[], []]
     assert [r[0] for r in session.requests].count("POST") == 2
+
+
+NETCONF = "/proxy/network/api/s/default/rest/networkconf/net-wan"
+SELF = "/api/users/self"
+
+
+async def test_can_manage_network() -> None:
+    """The admin role for the Network application allows writes; anything else does not."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    session.gets[SELF] = [
+        FakeResponse(200, {"permissions": {"network.management": ["admin"]}}),
+        FakeResponse(200, {"permissions": {"network.management": ["readonly"]}}),
+        FakeResponse(200, {"permissions": {}}),
+        FakeResponse(200, {"role": "admin"}),
+    ]
+    client = _client(session)
+    assert await client.can_manage_network() is True
+    assert await client.can_manage_network() is False
+    assert await client.can_manage_network() is False
+    with pytest.raises(NetworkError, match="unexpected"):
+        await client.can_manage_network()
+
+
+async def test_set_wan_type_sends_the_whole_network_with_the_token() -> None:
+    """The network is read, changed and written back with the CSRF token of the login."""
+    session = FakeSession()
+    session.login = [FakeResponse(200, headers={"x-csrf-token": "tok-1"})]
+    session.gets[NETCONF] = [
+        FakeResponse(200, {"data": [{"_id": "net-wan", "name": "Cable", "wan_type": "dhcp"}]}),
+        FakeResponse(200, {"data": [{"_id": "net-wan", "name": "Cable", "wan_type": "disabled"}]}),
+    ]
+    # The console answers a write with meta only; the network is read again
+    session.puts[NETCONF] = [FakeResponse(200, {"meta": {"rc": "ok"}, "data": []})]
+    client = _client(session)
+    assert await client.set_wan_type("net-wan", "disabled") == "disabled"
+    method, url, body, headers = session.writes[0]
+    assert (method, url.endswith(NETCONF)) == ("PUT", True)
+    assert body == {"_id": "net-wan", "name": "Cable", "wan_type": "disabled"}
+    assert headers["x-csrf-token"] == "tok-1"
+
+
+async def test_set_wan_type_errors() -> None:
+    """Odd answers and a refused write are errors; a 403 names the missing rights."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    session.gets[NETCONF] = [
+        FakeResponse(200, {"data": []}),
+        FakeResponse(200, {"data": [{"_id": "net-wan"}]}),
+        FakeResponse(200, {"data": [{"_id": "net-wan"}]}),
+        FakeResponse(200, {"data": [{"_id": "net-wan"}]}),
+    ]
+    session.puts[NETCONF] = [
+        FakeResponse(200, {"meta": {"rc": "error", "msg": "api.err.Invalid"}}),
+        FakeResponse(200, ["junk"]),
+        FakeResponse(403, path=NETCONF),
+    ]
+    client = _client(session)
+    with pytest.raises(NetworkError, match="unexpected answer"):
+        await client.set_wan_type("net-wan", "disabled")
+    with pytest.raises(NetworkError, match=r"write refused \(api.err.Invalid\)"):
+        await client.set_wan_type("net-wan", "disabled")
+    with pytest.raises(NetworkError, match=r"write refused \(unexpected answer\)"):
+        await client.set_wan_type("net-wan", "disabled")
+    with pytest.raises(NetworkPermissionError):
+        await client.set_wan_type("net-wan", "disabled")

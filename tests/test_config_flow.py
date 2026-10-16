@@ -11,7 +11,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.network_plus.api import NetworkAuthError, NetworkError
-from custom_components.network_plus.const import DOMAIN
+from custom_components.network_plus.const import (
+    CONF_ADMIN_PASSWORD,
+    CONF_ADMIN_USERNAME,
+    CONF_AUTO_OFF_MINUTES,
+    CONF_LTE_LIMIT_PERCENT,
+    CONF_USE_ADMIN,
+    DOMAIN,
+)
 
 from .conftest import ENTRY_DATA, HOST, MAC, FakeConsole, gateway
 
@@ -29,7 +36,7 @@ async def test_user_creates_entry(hass: HomeAssistant, console: FakeConsole) -> 
     result = await _start(hass, {**ENTRY_DATA, CONF_HOST: f" {HOST} "})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Gateway"
-    assert result["data"] == ENTRY_DATA
+    assert result["data"] == {**ENTRY_DATA, CONF_USE_ADMIN: False}
     assert result["result"].unique_id == MAC
     assert console.created_with[0] == (HOST, "homeassistant", "secret")
     # The flow's session is given back; the entry's own session was created after it
@@ -136,3 +143,76 @@ async def test_reauth(
     assert result["reason"] == "reauth_successful"
     assert setup_entry.data[CONF_PASSWORD] == "new"
     assert console.created_with[-1][2] == "new"
+
+
+async def test_admin_opt_in(hass: HomeAssistant, console: FakeConsole) -> None:
+    """With the opt-in a second dialog asks for admin credentials and checks their rights."""
+    result = await _start(hass, {**ENTRY_DATA, CONF_USE_ADMIN: True})
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "admin"
+    admin = {CONF_ADMIN_USERNAME: "netadmin", CONF_ADMIN_PASSWORD: "admin-secret"}
+    # Wrong admin password, then a user without the admin role, then the console away
+    console.error = NetworkAuthError("no")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], admin)
+    assert result["errors"] == {"base": "admin_invalid_auth"}
+    console.error = None
+    console.permissions = {"network.management": ["readonly"]}
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], admin)
+    assert result["errors"] == {"base": "not_admin"}
+    console.permissions = {"network.management": ["admin"]}
+    console.error = NetworkError("down")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], admin)
+    assert result["errors"] == {"base": "cannot_connect"}
+    console.error = None
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], admin)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {**ENTRY_DATA, CONF_USE_ADMIN: True, **admin}
+    assert console.created_with[-1] == (HOST, "netadmin", "admin-secret")
+    assert console.detached == 5  # every check gave its session back
+
+
+async def test_no_opt_in_stores_no_admin_keys(hass: HomeAssistant, console: FakeConsole) -> None:
+    """Without the opt-in the entry carries no admin credentials."""
+    result = await _start(hass, ENTRY_DATA)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_USE_ADMIN] is False
+    assert CONF_ADMIN_USERNAME not in result["data"]
+
+
+async def test_reconfigure_toggles_admin(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """Reconfigure can drop the admin credentials, and add them again."""
+    result = await setup_admin_entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**ENTRY_DATA, CONF_USE_ADMIN: False}
+    )
+    assert result["reason"] == "reconfigure_successful"
+    await hass.async_block_till_done()
+    assert setup_admin_entry.data[CONF_USE_ADMIN] is False
+    assert CONF_ADMIN_USERNAME not in setup_admin_entry.data
+    assert hass.states.get("switch.gateway_enforce_backup") is None
+
+    result = await setup_admin_entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**ENTRY_DATA, CONF_USE_ADMIN: True}
+    )
+    assert result["step_id"] == "admin"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_ADMIN_USERNAME: "netadmin", CONF_ADMIN_PASSWORD: "admin-secret"}
+    )
+    assert result["reason"] == "reconfigure_successful"
+    await hass.async_block_till_done()
+    assert setup_admin_entry.data[CONF_ADMIN_USERNAME] == "netadmin"
+    assert hass.states.get("switch.gateway_enforce_backup") is not None
+
+
+async def test_options(hass: HomeAssistant, setup_admin_entry: MockConfigEntry) -> None:
+    """The auto-off time and the LTE limit are options."""
+    result = await hass.config_entries.options.async_init(setup_admin_entry.entry_id)
+    assert result["type"] is FlowResultType.FORM
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_AUTO_OFF_MINUTES: 30, CONF_LTE_LIMIT_PERCENT: 50}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert setup_admin_entry.options == {CONF_AUTO_OFF_MINUTES: 30, CONF_LTE_LIMIT_PERCENT: 50}

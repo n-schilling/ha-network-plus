@@ -13,10 +13,16 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 from .api import NetworkClient
+from .const import CONF_ADMIN_PASSWORD, CONF_ADMIN_USERNAME, CONF_USE_ADMIN
 from .coordinator import NetworkConfigEntry, NetworkCoordinator, RuntimeData
 from .entity import gateway_device_info
 
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.EVENT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 
 def create_client(hass: HomeAssistant, data: dict[str, object]) -> NetworkClient:
@@ -38,8 +44,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> b
     # Home Assistant detaches the session with the entry as well, also after
     # a failed setup; this makes it visible and independent of that
     entry.async_on_unload(client.detach)
+    admin_client = None
+    if entry.data.get(CONF_USE_ADMIN) and entry.data.get(CONF_ADMIN_USERNAME):
+        # The admin opt-in: its own user, its own session, used only for writes
+        admin_client = create_client(
+            hass,
+            {
+                **entry.data,
+                CONF_USERNAME: entry.data[CONF_ADMIN_USERNAME],
+                CONF_PASSWORD: entry.data[CONF_ADMIN_PASSWORD],
+            },
+        )
+        entry.async_on_unload(admin_client.detach)
     # The config flow sets the gateway's MAC as unique ID
-    coordinator = NetworkCoordinator(hass, entry, client, str(entry.unique_id))
+    coordinator = NetworkCoordinator(hass, entry, client, str(entry.unique_id), admin_client)
     await coordinator.async_config_entry_first_refresh()
     # The gateway's device is created here so the LTE device can hang below it
     device = dr.async_get(hass).async_get_or_create(
@@ -47,7 +65,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> b
         **gateway_device_info(coordinator.data.gateway, entry.title),
     )
     entry.runtime_data = RuntimeData(
-        client=client, coordinator=coordinator, gateway_device_id=device.id
+        client=client,
+        coordinator=coordinator,
+        gateway_device_id=device.id,
+        admin_client=admin_client,
     )
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_create_background_task(hass, coordinator.async_listen(), "network_plus websocket")

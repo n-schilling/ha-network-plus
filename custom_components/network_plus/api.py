@@ -1,8 +1,8 @@
 """Local client for the UniFi Network application on a UniFi OS console.
 
 The endpoints are the ones the console's own web interface uses; they are not
-a published API. Every request goes through ``_get`` so a changed interface
-fails in one place with a clear error.
+a published API. Every request goes through ``_request`` so a changed
+interface fails in one place with a clear error.
 """
 
 from __future__ import annotations
@@ -27,6 +27,10 @@ from .model import normalize_mac
 TIMEOUT = ClientTimeout(total=15)
 # Seconds between websocket pings; a silent connection is noticed after twice that.
 HEARTBEAT = 30
+# The console protects writes with a token it hands out at login and with answers
+CSRF_HEADER = "x-csrf-token"
+# The permission a user needs to change the network configuration
+NETWORK_ADMIN = ("network.management", "admin")
 
 # Device types of gateways in the UniFi Network application
 GATEWAY_TYPES = frozenset({"udm", "ugw", "uxg"})
@@ -38,6 +42,10 @@ class NetworkError(Exception):
 
 class NetworkAuthError(NetworkError):
     """The console rejected the user name or password."""
+
+
+class NetworkPermissionError(NetworkError):
+    """The console refused a write: the user may not change the configuration."""
 
 
 class NetworkClient:
@@ -61,6 +69,7 @@ class NetworkClient:
         self._login_lock = asyncio.Lock()
         # Counts successful logins, so concurrent callers log in only once
         self._login_generation = 0
+        self._csrf = ""
 
     @property
     def _base(self) -> str:
@@ -91,6 +100,7 @@ class NetworkClient:
                         detail = f" {code}" if code else ""
                         raise NetworkError(f"login refused (HTTP {resp.status}{detail})")
                     _raise_for_status(resp)
+                    self._remember_csrf(resp)
             except (ClientError, TimeoutError) as err:
                 raise NetworkError(_describe(err)) from err
             self._logged_in = True
@@ -101,20 +111,30 @@ class NetworkClient:
         if self._login_generation == generation:
             self._logged_in = False
 
-    async def _get(self, path: str) -> Any:
-        """GET a JSON document; log in first and once more when the session expired."""
+    def _remember_csrf(self, resp: ClientResponse) -> None:
+        if token := resp.headers.get(CSRF_HEADER):
+            self._csrf = token
+
+    async def _request(self, method: str, path: str, body: Any = None) -> Any:
+        """Send a request for a JSON document; log in first and once more when the session expired."""
         for attempt in range(2):
             if not self._logged_in:
                 await self.login(self._login_generation)
             generation = self._login_generation
+            headers = {CSRF_HEADER: self._csrf} if method != "GET" else {}
             try:
-                async with self._session.get(f"{self._base}{path}", timeout=TIMEOUT) as resp:
+                async with self._session.request(
+                    method, f"{self._base}{path}", json=body, headers=headers, timeout=TIMEOUT
+                ) as resp:
                     if resp.status == 401:
                         self._session_rejected(generation)
                         if attempt == 0:
                             continue
                         raise NetworkAuthError("session not accepted after a new login")
+                    if resp.status == 403 and method != "GET":
+                        raise NetworkPermissionError(f"{path}: the user may not write (HTTP 403)")
                     _raise_for_status(resp)
+                    self._remember_csrf(resp)
                     try:
                         return await resp.json(content_type=None)
                     except ValueError as err:
@@ -122,6 +142,9 @@ class NetworkClient:
             except (ClientError, TimeoutError) as err:
                 raise NetworkError(_describe(err)) from err
         raise NetworkError("unreachable")  # pragma: no cover
+
+    async def _get(self, path: str) -> Any:
+        return await self._request("GET", path)
 
     async def get_devices(self) -> list[dict[str, Any]]:
         """Return the runtime objects of all devices of the site."""
@@ -136,7 +159,7 @@ class NetworkClient:
         return find_gateway(await self.get_devices(), mac)
 
     async def get_wan_configs(self) -> list[dict[str, Any]]:
-        """Return the configured uplinks (name, network group, failover priority)."""
+        """Return the configured uplinks (name, network group, failover priority, WAN type)."""
         body = await self._get(
             f"/proxy/network/v2/api/site/{self._site}/wan/enriched-configuration"
         )
@@ -153,6 +176,39 @@ class NetworkClient:
         if not isinstance(body, list):
             raise NetworkError("clients/active: unexpected answer")
         return [c for c in body if isinstance(c, dict)]
+
+    async def can_manage_network(self) -> bool:
+        """Return whether the user may change the network configuration."""
+        body = await self._get("/api/users/self")
+        permissions = body.get("permissions") if isinstance(body, dict) else None
+        if not isinstance(permissions, dict):
+            raise NetworkError("users/self: unexpected answer")
+        area, level = NETWORK_ADMIN
+        granted = permissions.get(area)
+        return isinstance(granted, list) and level in granted
+
+    async def set_wan_type(self, network_id: str, wan_type: str) -> str:
+        """Set the WAN type of an uplink network and return the type the console kept.
+
+        The console wants the whole network object back, so it is read first;
+        its answer to the write carries only ``meta.rc``, so the network is
+        read once more to see what it kept.
+        """
+        path = f"/proxy/network/api/s/{self._site}/rest/networkconf/{network_id}"
+        network = await self._get_network(path, network_id)
+        answer = await self._request("PUT", path, {**network, "wan_type": wan_type})
+        meta = answer.get("meta") if isinstance(answer, dict) else None
+        if not isinstance(meta, dict) or meta.get("rc") != "ok":
+            detail = meta.get("msg") if isinstance(meta, dict) else "unexpected answer"
+            raise NetworkError(f"networkconf {network_id}: write refused ({detail})")
+        return str((await self._get_network(path, network_id)).get("wan_type") or "")
+
+    async def _get_network(self, path: str, network_id: str) -> dict[str, Any]:
+        body = await self._get(path)
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            raise NetworkError(f"networkconf {network_id}: unexpected answer")
+        return data[0]
 
     def detach(self) -> None:
         """Give the session's connector back; for a client that is no longer needed."""

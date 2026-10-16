@@ -7,13 +7,15 @@
           "host": "Host",
           "username": "Username",
           "password": "Password",
-          "verify_ssl": "Verify the certificate"
+          "verify_ssl": "Verify the certificate",
+          "use_admin": "Use admin features"
         },
         "data_description": {
           "host": "IP address or host name of the console, for example 192.168.1.1.",
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
-          "verify_ssl": "Turn off only if the console uses its own self-signed certificate."
+          "verify_ssl": "Turn off only if the console uses its own self-signed certificate.",
+          "use_admin": "For the switch \"Enforce backup\", which switches the preferred uplink off in the console. Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
       "reconfigure": {
@@ -22,13 +24,15 @@
           "host": "Host",
           "username": "Username",
           "password": "Password",
-          "verify_ssl": "Verify the certificate"
+          "verify_ssl": "Verify the certificate",
+          "use_admin": "Use admin features"
         },
         "data_description": {
           "host": "IP address or host name of the console, for example 192.168.1.1.",
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
-          "verify_ssl": "Turn off only if the console uses its own self-signed certificate."
+          "verify_ssl": "Turn off only if the console uses its own self-signed certificate.",
+          "use_admin": "For the switch \"Enforce backup\", which switches the preferred uplink off in the console. Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
       "reauth_confirm": {
@@ -39,12 +43,26 @@
         "data_description": {
           "password": "The password of the local user."
         }
+      },
+      "admin": {
+        "title": "Admin credentials",
+        "description": "A second local user of the console with the admin role for the Network application. It is used only to switch the preferred uplink and is stored apart from the read-only credentials.",
+        "data": {
+          "admin_username": "Admin username",
+          "admin_password": "Admin password"
+        },
+        "data_description": {
+          "admin_username": "A local user with the admin role for Network, not a UI.com account.",
+          "admin_password": "The password of that user."
+        }
       }
     },
     "error": {
       "cannot_connect": "The console does not answer. Check the address and, if the console has a self-signed certificate, the certificate check.",
       "invalid_auth": "The console rejected the username or the password.",
-      "no_gateway": "The console has no gateway in its UniFi Network application."
+      "no_gateway": "The console has no gateway in its UniFi Network application.",
+      "admin_invalid_auth": "The console rejected the admin credentials.",
+      "not_admin": "This user may not change the Network configuration. It needs the admin role for the Network application."
     },
     "abort": {
       "already_configured": "This gateway is already set up.",
@@ -135,6 +153,11 @@
       "lte_signal": {
         "name": "LTE signal"
       }
+    },
+    "switch": {
+      "enforce_backup": {
+        "name": "Enforce backup"
+      }
     }
   },
   "exceptions": {
@@ -146,6 +169,41 @@
     },
     "gateway_missing": {
       "message": "The console no longer reports the gateway."
+    },
+    "no_admin": {
+      "message": "This needs admin credentials; add them with Reconfigure."
+    },
+    "no_wan_config": {
+      "message": "The preferred uplink is not found in the console's configuration."
+    },
+    "backup_already_active": {
+      "message": "The backup uplink already carries the traffic; the preferred uplink is not switched off."
+    },
+    "lte_data_plan_used": {
+      "message": "The LTE data plan is {percent} % used (limit {limit} %); the preferred uplink is not switched off."
+    },
+    "admin_login_rejected": {
+      "message": "The console rejected the admin credentials; check them with Reconfigure."
+    },
+    "admin_not_allowed": {
+      "message": "The admin user may not change the Network configuration."
+    },
+    "console_write_failed": {
+      "message": "The console did not take the change: {error}"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "auto_off_minutes": "Enforce backup: switch back after",
+          "lte_limit_percent": "Enforce backup: refuse from an LTE usage of"
+        },
+        "data_description": {
+          "auto_off_minutes": "Minutes after which the preferred uplink is switched on again by itself. In a test, about 60 MB per minute ran over LTE.",
+          "lte_limit_percent": "Percent of the LTE data plan from which the switch refuses to switch on."
+        }
+      }
     }
   }
 }

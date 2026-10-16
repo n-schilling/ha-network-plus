@@ -11,7 +11,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -19,6 +19,7 @@ from .api import (
     NetworkAuthError,
     NetworkClient,
     NetworkError,
+    NetworkPermissionError,
     find_gateway,
     find_lte_devices,
     is_lte_device,
@@ -53,6 +54,7 @@ class RuntimeData:
     client: NetworkClient
     coordinator: NetworkCoordinator
     gateway_device_id: str
+    admin_client: NetworkClient | None = None  # only with the admin opt-in
 
 
 type NetworkConfigEntry = ConfigEntry[RuntimeData]
@@ -77,6 +79,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         entry: NetworkConfigEntry,
         client: NetworkClient,
         mac: str,
+        admin_client: NetworkClient | None = None,
     ) -> None:
         """Initialize the coordinator for the gateway with ``mac``."""
         super().__init__(
@@ -87,6 +90,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             update_interval=UPDATE_INTERVAL,
         )
         self.client = client
+        self.admin_client = admin_client
         self.mac = mac
         self.websocket_connected = False
         self._configs: list[dict[str, Any]] = []
@@ -158,6 +162,39 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
         self._notify(state)
         return state
+
+    async def async_set_wan_type(self, key: str, wan_type: str) -> None:
+        """Set the WAN type of the uplink ``key`` with the admin credentials, then refresh."""
+        if self.admin_client is None:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_admin")
+        uplink = self.data.uplinks.get(key)
+        if uplink is None or uplink.config_id is None:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_wan_config")
+        try:
+            kept = await self.admin_client.set_wan_type(uplink.config_id, wan_type)
+        except NetworkAuthError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="admin_login_rejected"
+            ) from err
+        except NetworkPermissionError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="admin_not_allowed"
+            ) from err
+        except NetworkError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="console_write_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
+        if kept != wan_type:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="console_write_failed",
+                translation_placeholders={"error": f"console kept {kept or 'nothing'}"},
+            )
+        # Not async_request_refresh: that one is debounced for 10 s, and the
+        # switch must show the new state right after the write
+        await self.async_refresh()
 
     def _build(self) -> NetworkState:
         return parse_state(

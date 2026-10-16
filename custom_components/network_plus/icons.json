@@ -63,6 +63,14 @@
       "lte_signal": {
         "default": "mdi:signal-cellular-2"
       }
+    },
+    "switch": {
+      "enforce_backup": {
+        "default": "mdi:swap-horizontal-bold",
+        "state": {
+          "on": "mdi:sim-alert"
+        }
+      }
     }
   }
 }

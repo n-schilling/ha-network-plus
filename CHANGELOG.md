@@ -2,6 +2,14 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-10-16
+
+### Added
+
+- Admin features as an opt-in at setup, with a separate dialog for admin credentials kept apart from the read-only user.
+- Switch "Enforce backup" (admin features only): switches the preferred uplink off in the console so the gateway fails over, and on again. Switches back by itself after a configurable time (default 15 min), refuses while the backup is active or from a configurable LTE usage on (default 80 %).
+- Options for the two limits of the switch.
+
 ## [0.1.1] - 2026-10-16
 
 ### Added

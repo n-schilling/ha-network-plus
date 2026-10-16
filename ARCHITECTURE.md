@@ -7,9 +7,11 @@ does for its users.
 ## Scope
 
 One config entry is one UniFi OS console with its UniFi Network application.
-The integration reads; it never writes to the console. It complements the
-UniFi integration that ships with Home Assistant and does not touch its
-entities or devices.
+The integration reads. The one exception is the switch "Enforce backup",
+which exists only with the admin opt-in (separate admin credentials) and
+changes exactly one thing: the WAN type of the preferred uplink. It
+complements the UniFi integration that ships with Home Assistant and does not
+touch its entities or devices.
 
 ## Data sources
 
@@ -24,6 +26,8 @@ a changed interface fails in one place.
 | `GET …/v2/api/site/<site>/wan/enriched-configuration` | Names and failover priorities of the uplinks | Every 60 s |
 | `GET …/v2/api/site/<site>/clients/active?includeTeleport=true` | Remote clients (Teleport, VPN) | Every 60 s |
 | `wss://…/wss/s/<site>/events?clients=v2` | `device:sync` messages with the same runtime objects, about once a second | Continuous |
+| `GET /api/users/self` | Whether the admin user may change the Network configuration (`permissions["network.management"]` holds `admin`) | Config flow |
+| `GET` + `PUT …/rest/networkconf/<id>` | The switch "Enforce backup": read the uplink network, write it back with `wan_type` `disabled` or the previous type. Needs the CSRF token the console hands out at login and with answers | On switching |
 
 The LTE data usage is `rx_bytes + tx_bytes` of the LTE device's runtime object.
 On the console this was developed against, that sum equals the sum of the
@@ -115,6 +119,26 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   uplink; "offline" is reported only when the gateway says so.
 - Disabled by default: latency and availability per uplink, the public
   addresses, the LTE signal. Enabled: what a dashboard or automation needs.
+
+## The admin opt-in and the switch "Enforce backup"
+
+- Admin features are an explicit choice at setup: a checkbox, and only then
+  a second dialog for separate admin credentials. The read-only user stays
+  what it is; the admin user gets its own client and session and is used
+  for nothing but the write. Without the opt-in the switch does not exist.
+- The switch's state is read, not assumed: on means the preferred uplink's
+  `wan_type` is `disabled` in the console's configuration. Switching on
+  remembers the previous type and the start in the entry's data, so a
+  restart neither forgets what to restore nor when.
+- Guards: it refuses while the backup already carries the traffic and from a
+  configurable share of the LTE data plan on; it switches back by itself
+  after a configurable time (default 15 min), also after a restart, and
+  retries a failed switch-back every minute. Live, a provoked failover ran
+  about 60 MB per minute over LTE.
+- Verified live: setting `wan_type` to `disabled` fails the gateway over
+  within about 15 s and the integration reports `failover`; restoring the
+  previous type brings it back as fast and reports `restored`. The port's
+  link stays up during that, unlike with a pulled cable.
 
 ## Decisions taken on purpose
 

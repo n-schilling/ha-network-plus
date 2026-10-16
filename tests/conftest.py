@@ -15,7 +15,12 @@ from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VE
 from homeassistant.core import HomeAssistant
 
 from custom_components.network_plus.api import NetworkError, find_gateway
-from custom_components.network_plus.const import DOMAIN
+from custom_components.network_plus.const import (
+    CONF_ADMIN_PASSWORD,
+    CONF_ADMIN_USERNAME,
+    CONF_USE_ADMIN,
+    DOMAIN,
+)
 
 MAC = "02:a1:b2:c3:d4:e5"
 LTE_MAC = "02:a1:b2:c3:d4:e6"
@@ -32,6 +37,11 @@ ENTRY_DATA = {
     CONF_VERIFY_SSL: True,
 }
 TRANSITION = 1_700_000_000_000  # ms
+ADMIN_DATA = {
+    CONF_USE_ADMIN: True,
+    CONF_ADMIN_USERNAME: "netadmin",
+    CONF_ADMIN_PASSWORD: "admin-secret",
+}
 
 CLOSE = object()
 
@@ -39,9 +49,27 @@ CLOSE = object()
 def wan_configs() -> list[dict[str, Any]]:
     """The uplink configuration of a console with cable, an unused WAN2 and LTE."""
     return [
-        {"name": "Cable", "wan_networkgroup": "WAN", "wan_failover_priority": 1},
-        {"name": "Internet 2", "wan_networkgroup": "WAN2", "wan_failover_priority": 2},
-        {"name": "LTE", "wan_networkgroup": "WAN_LTE_FAILOVER", "wan_failover_priority": -1},
+        {
+            "_id": "net-wan",
+            "name": "Cable",
+            "wan_networkgroup": "WAN",
+            "wan_failover_priority": 1,
+            "wan_type": "dhcp",
+        },
+        {
+            "_id": "net-wan2",
+            "name": "Internet 2",
+            "wan_networkgroup": "WAN2",
+            "wan_failover_priority": 2,
+            "wan_type": "dhcp",
+        },
+        {
+            "_id": "net-lte",
+            "name": "LTE",
+            "wan_networkgroup": "WAN_LTE_FAILOVER",
+            "wan_failover_priority": -1,
+            "wan_type": "static",
+        },
     ]
 
 
@@ -148,6 +176,10 @@ class FakeConsole:
         ]
         self.error: Exception | None = None
         self.clients_error: Exception | None = None
+        # Admin features: what the console answers about the user's rights and writes
+        self.permissions: dict[str, list[str]] = {"network.management": ["admin"]}
+        self.write_error: Exception | None = None
+        self.writes: list[tuple[str, str]] = []
         self.close_with_error = False
         self.detached = 0
         # Set to hold a poll's device request until the test releases it
@@ -185,6 +217,21 @@ class FakeConsole:
 
     def detach(self) -> None:
         self.detached += 1
+
+    async def can_manage_network(self) -> bool:
+        if self.error:
+            raise self.error
+        return "admin" in self.permissions.get("network.management", [])
+
+    async def set_wan_type(self, network_id: str, wan_type: str) -> str:
+        if self.write_error:
+            raise self.write_error
+        self.writes.append((network_id, wan_type))
+        for config in self.configs:
+            if config.get("_id") == network_id:
+                config["wan_type"] = wan_type
+                return wan_type
+        return ""
 
     async def listen(
         self,
@@ -234,6 +281,28 @@ def console() -> Generator[FakeConsole]:
 def config_entry() -> MockConfigEntry:
     """A configured console."""
     return MockConfigEntry(domain=DOMAIN, title="Gateway", unique_id=MAC, data=dict(ENTRY_DATA))
+
+
+@pytest.fixture
+def admin_entry() -> MockConfigEntry:
+    """A configured console with the admin opt-in."""
+    return MockConfigEntry(
+        domain=DOMAIN,
+        title="Gateway",
+        unique_id=MAC,
+        data={**ENTRY_DATA, **ADMIN_DATA},
+    )
+
+
+@pytest.fixture
+async def setup_admin_entry(
+    hass: HomeAssistant, console: FakeConsole, admin_entry: MockConfigEntry
+) -> MockConfigEntry:
+    """Set up the integration with admin credentials."""
+    admin_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(admin_entry.entry_id)
+    await hass.async_block_till_done()
+    return admin_entry
 
 
 @pytest.fixture

@@ -15,6 +15,7 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
+from .const import CONF_ADMIN_PASSWORD, CONF_ADMIN_USERNAME
 from .coordinator import NetworkConfigEntry
 
 UPLINK_FIELDS = ("key", "priority", "online", "latency", "availability")
@@ -40,7 +41,11 @@ async def async_get_config_entry_diagnostics(
     if speedtest:
         speedtest["last_run"] = speedtest["last_run"] is not None
     return {
-        "entry": async_redact_data(dict(entry.data), {CONF_HOST, CONF_PASSWORD, CONF_USERNAME}),
+        "entry": async_redact_data(
+            dict(entry.data),
+            {CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_ADMIN_USERNAME, CONF_ADMIN_PASSWORD},
+        ),
+        "options": dict(entry.options),
         "websocket_connected": coordinator.websocket_connected,
         "last_update_success": coordinator.last_update_success,
         "gateway": {"model": data.gateway.model, "version": data.gateway.version},

@@ -7,13 +7,15 @@
           "host": "Host",
           "username": "Benutzername",
           "password": "Passwort",
-          "verify_ssl": "Zertifikat prüfen"
+          "verify_ssl": "Zertifikat prüfen",
+          "use_admin": "Admin-Funktionen nutzen"
         },
         "data_description": {
           "host": "IP-Adresse oder Hostname der Konsole, zum Beispiel 192.168.1.1.",
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
-          "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt."
+          "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt.",
+          "use_admin": "Für den Schalter „Backup erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
       "reconfigure": {
@@ -22,13 +24,15 @@
           "host": "Host",
           "username": "Benutzername",
           "password": "Passwort",
-          "verify_ssl": "Zertifikat prüfen"
+          "verify_ssl": "Zertifikat prüfen",
+          "use_admin": "Admin-Funktionen nutzen"
         },
         "data_description": {
           "host": "IP-Adresse oder Hostname der Konsole, zum Beispiel 192.168.1.1.",
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
-          "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt."
+          "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt.",
+          "use_admin": "Für den Schalter „Backup erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
       "reauth_confirm": {
@@ -39,12 +43,26 @@
         "data_description": {
           "password": "Das Passwort des lokalen Benutzers."
         }
+      },
+      "admin": {
+        "title": "Admin-Zugangsdaten",
+        "description": "Ein zweiter lokaler Benutzer der Konsole mit der Admin-Rolle für die Network-Anwendung. Er wird nur zum Schalten der bevorzugten Leitung genutzt und getrennt von den Lese-Zugangsdaten gespeichert.",
+        "data": {
+          "admin_username": "Admin-Benutzername",
+          "admin_password": "Admin-Passwort"
+        },
+        "data_description": {
+          "admin_username": "Ein lokaler Benutzer mit Admin-Rolle für Network, kein UI.com-Konto.",
+          "admin_password": "Das Passwort dieses Benutzers."
+        }
       }
     },
     "error": {
       "cannot_connect": "Die Konsole antwortet nicht. Prüfe die Adresse und, falls die Konsole ein selbst signiertes Zertifikat hat, die Zertifikatsprüfung.",
       "invalid_auth": "Die Konsole hat Benutzername oder Passwort abgelehnt.",
-      "no_gateway": "Die Konsole hat kein Gateway in ihrer UniFi-Network-Anwendung."
+      "no_gateway": "Die Konsole hat kein Gateway in ihrer UniFi-Network-Anwendung.",
+      "admin_invalid_auth": "Die Konsole hat die Admin-Zugangsdaten abgelehnt.",
+      "not_admin": "Dieser Benutzer darf die Network-Konfiguration nicht ändern. Er braucht die Admin-Rolle für die Network-Anwendung."
     },
     "abort": {
       "already_configured": "Dieses Gateway ist schon eingerichtet.",
@@ -135,6 +153,11 @@
       "lte_signal": {
         "name": "LTE-Signal"
       }
+    },
+    "switch": {
+      "enforce_backup": {
+        "name": "Backup erzwingen"
+      }
     }
   },
   "exceptions": {
@@ -146,6 +169,41 @@
     },
     "gateway_missing": {
       "message": "Die Konsole meldet das Gateway nicht mehr."
+    },
+    "no_admin": {
+      "message": "Dafür sind Admin-Zugangsdaten nötig; richte sie über „Neu konfigurieren“ ein."
+    },
+    "no_wan_config": {
+      "message": "Die bevorzugte Leitung ist in der Konfiguration der Konsole nicht zu finden."
+    },
+    "backup_already_active": {
+      "message": "Die Backup-Leitung trägt den Verkehr schon; die bevorzugte Leitung wird nicht abgeschaltet."
+    },
+    "lte_data_plan_used": {
+      "message": "Der LTE-Datenplan ist zu {percent} % verbraucht (Grenze {limit} %); die bevorzugte Leitung wird nicht abgeschaltet."
+    },
+    "admin_login_rejected": {
+      "message": "Die Konsole hat die Admin-Zugangsdaten abgelehnt; prüfe sie über „Neu konfigurieren“."
+    },
+    "admin_not_allowed": {
+      "message": "Der Admin-Benutzer darf die Network-Konfiguration nicht ändern."
+    },
+    "console_write_failed": {
+      "message": "Die Konsole hat die Änderung nicht übernommen: {error}"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "auto_off_minutes": "Backup erzwingen: automatisch zurückschalten nach",
+          "lte_limit_percent": "Backup erzwingen: verweigern ab LTE-Verbrauch von"
+        },
+        "data_description": {
+          "auto_off_minutes": "Minuten, nach denen die bevorzugte Leitung von selbst wieder eingeschaltet wird. Beim Test liefen rund 60 MB pro Minute über LTE.",
+          "lte_limit_percent": "Prozent des LTE-Datenplans, ab denen der Schalter das Einschalten verweigert."
+        }
+      }
     }
   }
 }

@@ -83,6 +83,8 @@ class Uplink:
     availability: float | None = None  # %, over the gateway's monitoring period
     ipv4: str | None = None  # public address of the uplink's port
     ipv6: str | None = None
+    config_id: str | None = None  # the uplink network in the console's configuration
+    wan_type: str | None = None  # dhcp, static, pppoe or disabled
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,12 +190,18 @@ def parse_state(
     """Build the state from the runtime objects, the uplink configuration and the clients."""
     names: dict[str, str] = {}
     priorities: dict[str, int] = {}
+    config_ids: dict[str, str] = {}
+    wan_types: dict[str, str] = {}
     for config in configs:
         key = config.get("wan_networkgroup")
         if not isinstance(key, str):
             continue
         names[key] = str(config.get("name") or key)
         priorities[key] = _int(config.get("wan_failover_priority")) or 0
+        if config.get("_id"):
+            config_ids[key] = str(config["_id"])
+        if config.get("wan_type"):
+            wan_types[key] = str(config["wan_type"])
 
     status = _dict(raw.get("last_wan_status"))
     stats = _dict(raw.get("uptime_stats"))
@@ -209,6 +217,8 @@ def parse_state(
             availability=_availability(_dict(stats.get(key))),
             ipv4=_ipv4(_dict(interfaces.get(key)).get("ip")),
             ipv6=_public_ipv6(_dict(raw.get(_port_key(key))).get("ipv6")),
+            config_id=config_ids.get(key),
+            wan_type=wan_types.get(key),
         )
         for key, value in status.items()
         if isinstance(key, str)
