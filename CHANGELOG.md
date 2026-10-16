@@ -2,6 +2,12 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- README: new section "Using the data" with a latency helper that knows the active uplink, three automations and dashboard cards. It replaces the two examples; the threshold-helper example would have alarmed on every failover to a slower backup.
+
 ## [0.2.1] - 2026-10-16
 
 ### Changed
