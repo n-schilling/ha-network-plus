@@ -1,9 +1,9 @@
 # Network Plus for Home Assistant
 
-[![CI](https://github.com/n-schilling/ha-network-plus/actions/workflows/ci.yaml/badge.svg?branch=dev)](https://github.com/n-schilling/ha-network-plus/actions/workflows/ci.yaml)
+[![Release](https://img.shields.io/github/v/release/n-schilling/ha-network-plus)](https://github.com/n-schilling/ha-network-plus/releases)
+[![CI](https://github.com/n-schilling/ha-network-plus/actions/workflows/ci.yaml/badge.svg?branch=main)](https://github.com/n-schilling/ha-network-plus/actions/workflows/ci.yaml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-
-> **Work in progress.** Not released yet.
+[![HACS: custom](https://img.shields.io/badge/HACS-custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories)
 
 A custom integration that adds what the UniFi integration shipped with Home Assistant does not show: uplink status and failover, latency, speed test results, public addresses, the LTE data plan and remote clients. It complements that integration, it does not replace it. This project is not affiliated with or endorsed by Ubiquiti.
 
@@ -90,9 +90,45 @@ actions:
 
 Developed against a Dream Machine with UniFi Network 10.
 
-## Setup
+## Installation
 
-Settings → Devices & services → Add integration → Network Plus. Enter the console's address, the local user and its password. Turn off the certificate check only if the console uses a self-signed certificate.
+1. In HACS: **⋮ → Custom repositories**, add `https://github.com/n-schilling/ha-network-plus` as type **Integration**.
+2. Install **Network Plus** and restart Home Assistant.
+3. **Settings → Devices & services → Add integration → Network Plus.**
+
+### Installation parameters
+
+| Parameter | Description |
+|---|---|
+| Host | IP address or host name of the console, for example 192.168.1.1. |
+| Username | A local user of the console. Create one under UniFi OS → Admins & Users with local access only and the read-only role for the Network application; accounts of UI.com do not work. |
+| Password | The password of that user. |
+| Verify the certificate | On by default. Turn it off only if the console uses its own self-signed certificate; the connection stays encrypted. |
+
+The entry is named after the gateway. Reconfigure changes the address, the user or the certificate check; when the password changes, Home Assistant asks for the new one.
+
+## How the data is updated
+
+The console's websocket pushes the gateway's state about once a second; the integration applies a push at once when an uplink, the active uplink, an address or the LTE state changed. Numbers (latency, speed test, data usage, remote clients) are read every 60 seconds. If the console cannot be reached, the entities become unavailable until the next successful read.
+
+## Known limitations
+
+- Only uplinks the gateway monitors get entities; a configured but unused WAN port has none.
+- The address sensors show the uplink port's address. Behind another router this is a private address.
+- Speed tests are read, not started.
+- Remote clients are those the console lists as connected; of VPN servers only Teleport was tested.
+- Events are derived from state changes, not from the console's event log; packet loss and "failed multiple times" are not reported.
+
+## Troubleshooting
+
+- **"The console does not answer"**: check the address, and whether the console has a self-signed certificate (then turn the certificate check off).
+- **"The console rejected the username or the password"**: the user must be a local user of the console, not a UI.com account.
+- **Entities unavailable**: the console was not reachable at the last read; look at Settings → System → Logs for `network_plus`.
+- The diagnostics (⋮ on the integration's page → Download diagnostics) hold no address, user, password, MAC, uplink names or times and can be attached to an issue.
+
+## Removal
+
+Delete the integration under Settings → Devices & services. Nothing is left on the console; the integration never writes to it.
 
 ## For developers
 
