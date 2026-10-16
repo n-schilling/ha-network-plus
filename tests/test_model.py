@@ -269,9 +269,41 @@ def test_speedtest() -> None:
     raw["uplink"] = {"comment": "WAN", "latency": 15}
     assert parse_state(raw, wan_configs()).speedtest is None
     raw["uplink"] = {"xput_down": "fast", "speedtest_lastrun": 0, "speedtest_status": ""}
+    del raw["speedtest-status"]
     speedtest = parse_state(raw, wan_configs()).speedtest
     assert speedtest is not None
     assert (speedtest.download, speedtest.last_run, speedtest.status) == (None, None, None)
+    # Without the status block: no running flag, and the active uplink is the best guess
+    assert (speedtest.running, speedtest.uplink) == (None, "WAN")
+
+
+def test_speedtest_uplink() -> None:
+    """The interface of the last test maps to a WAN port's uplink, anything else to the backup."""
+    assert parse_state(gateway(), wan_configs()).speedtest.uplink == "WAN"  # type: ignore[union-attr]
+    # The LTE backup routes over a tunnel, which is no WAN port
+    over_lte = parse_state(gateway(interface="gre1"), wan_configs()).speedtest
+    assert over_lte.uplink == "WAN_LTE_FAILOVER"  # type: ignore[union-attr]
+    # Only source_interface, with the console's prefix
+    raw = gateway()
+    del raw["speedtest-status"]["interface_name"]
+    assert parse_state(raw, wan_configs()).speedtest.uplink == "WAN"  # type: ignore[union-attr]
+    # No interface at all: the active uplink
+    raw = gateway(interface=None, active="WAN_LTE_FAILOVER")
+    assert parse_state(raw, wan_configs()).speedtest.uplink == "WAN_LTE_FAILOVER"  # type: ignore[union-attr]
+    # An unknown interface without a backup uplink to blame: the active uplink
+    raw = gateway(interface="eth9")
+    raw["last_wan_status"] = {"WAN": "online"}
+    assert parse_state(raw, wan_configs()).speedtest.uplink == "WAN"  # type: ignore[union-attr]
+
+
+def test_speedtest_running() -> None:
+    """The status block says whether a test is in progress."""
+    assert parse_state(gateway(), wan_configs()).speedtest.running is False  # type: ignore[union-attr]
+    running = parse_state(gateway(speedtest_summary=1), wan_configs()).speedtest
+    assert running.running is True  # type: ignore[union-attr]
+    raw = gateway()
+    raw["speedtest-status"]["status_summary"] = "soon"
+    assert parse_state(raw, wan_configs()).speedtest.running is None  # type: ignore[union-attr]
 
 
 def test_latency_falls_back_to_uplink() -> None:
@@ -394,11 +426,19 @@ def test_state_with_lte_and_clients() -> None:
 
 
 def test_essentials() -> None:
-    """A push counts for uplinks, addresses, the active uplink and the LTE state, not for numbers."""
+    """A push counts for uplinks, addresses, the active uplink, the LTE state and a speed test.
+
+    Numbers alone (latency, a changed result with the same run time) do not count.
+    """
     base = parse_state(gateway(), wan_configs(), [lte_device()])
     same = parse_state(gateway(latency=99, download=1.0), wan_configs(), [lte_device(rx=5)])
     assert essentials(base) == essentials(same)
+    started = gateway(speedtest_summary=1)
+    finished = gateway()
+    finished["uplink"]["speedtest_lastrun"] = SPEEDTEST_RUN + 60
     for other in (
+        parse_state(started, wan_configs(), [lte_device()]),
+        parse_state(finished, wan_configs(), [lte_device()]),
         parse_state(gateway(wan="offline"), wan_configs(), [lte_device()]),
         parse_state(gateway(ipv4="198.51.100.8"), wan_configs(), [lte_device()]),
         parse_state(gateway(ipv6="2001:db8::8"), wan_configs(), [lte_device()]),

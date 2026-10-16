@@ -25,6 +25,7 @@ from .conftest import (
     IPV6,
     LTE_MAC,
     MAC,
+    SPEEDTEST_RUN,
     TRANSITION,
     FakeConsole,
     gateway,
@@ -308,6 +309,16 @@ async def test_speedtest_latency_and_vpn_sensors(
     last = hass.states.get("sensor.gateway_last_speed_test")
     assert last.state == "2023-11-14T22:13:20+00:00"  # type: ignore[union-attr]
     assert last.attributes["status"] == "Success"  # type: ignore[union-attr]
+    assert last.attributes["running"] is False  # type: ignore[union-attr]
+    # Every speed test sensor says which uplink the test ran over
+    for entity_id in (
+        "sensor.gateway_speed_test_download",
+        "sensor.gateway_speed_test_upload",
+        "sensor.gateway_speed_test_ping",
+        "sensor.gateway_last_speed_test",
+    ):
+        attributes = hass.states.get(entity_id).attributes  # type: ignore[union-attr]
+        assert (attributes["uplink"], attributes["uplink_name"]) == ("wan", "Cable")
     vpn = hass.states.get(VPN)
     assert vpn.state == "1"  # type: ignore[union-attr]
     assert vpn.attributes["clients"] == ["Phone"]  # type: ignore[union-attr]
@@ -402,7 +413,30 @@ async def test_speedtest_missing(
     await _poll(hass, setup_entry)
     assert _state(hass, "sensor.gateway_speed_test_download") == STATE_UNKNOWN
     assert _state(hass, "sensor.gateway_last_speed_test") == STATE_UNKNOWN
-    assert hass.states.get("sensor.gateway_last_speed_test").attributes["status"] is None  # type: ignore[union-attr]
+    last = hass.states.get("sensor.gateway_last_speed_test")
+    assert last.attributes["status"] is None  # type: ignore[union-attr]
+    assert last.attributes["running"] is None  # type: ignore[union-attr]
+    assert last.attributes["uplink"] is None  # type: ignore[union-attr]
+    assert hass.states.get("sensor.gateway_speed_test_download").attributes["uplink_name"] is None  # type: ignore[union-attr]
+
+
+async def test_speedtest_over_the_backup_shows_at_once(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A speed test that starts or finishes comes through the websocket, with its uplink."""
+    await console.push(hass, sync(gateway(speedtest_summary=1)))
+    last = hass.states.get("sensor.gateway_last_speed_test")
+    assert last.attributes["running"] is True  # type: ignore[union-attr]
+    finished = gateway(interface="gre1", download=40.0)
+    finished["uplink"]["speedtest_lastrun"] = SPEEDTEST_RUN + 60
+    await console.push(hass, sync(finished))
+    download = hass.states.get("sensor.gateway_speed_test_download")
+    assert download.state == "40.0"  # type: ignore[union-attr]
+    assert download.attributes["uplink"] == "wan_lte_failover"  # type: ignore[union-attr]
+    assert download.attributes["uplink_name"] == "LTE"  # type: ignore[union-attr]
+    last = hass.states.get("sensor.gateway_last_speed_test")
+    assert last.state == "2023-11-14T22:14:20+00:00"  # type: ignore[union-attr]
+    assert last.attributes["running"] is False  # type: ignore[union-attr]
 
 
 async def test_push_of_lte_state(

@@ -37,6 +37,8 @@ async def test_diagnostics_hold_nothing_personal(
         "ping": 18,
         "last_run": True,
         "status": "Success",
+        "uplink": "WAN",
+        "running": False,
     }
     assert result["lte"] == [
         {

@@ -9,6 +9,11 @@
         }
       }
     },
+    "button": {
+      "run_speedtest": {
+        "default": "mdi:play-speed"
+      }
+    },
     "event": {
       "internet": {
         "default": "mdi:web"

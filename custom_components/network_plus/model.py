@@ -32,6 +32,10 @@ LOCAL_CLIENT_TYPES = frozenset({"WIRED", "WIRELESS"})
 # Network group of an uplink -> port object of the gateway (WAN -> wan1)
 _WAN_GROUP = re.compile(r"^WAN(\d*)$")
 
+# Values of ``speedtest-status.status_summary`` of the gateway's runtime object
+SPEEDTEST_RUNNING = 1
+SPEEDTEST_FINISHED = 2
+
 # A transition timestamp this close to a seen switch of the active uplink
 # belongs to that switch, and a fresh timestamp waits this long for a switch
 # to follow before it counts as a brief failover: the console's clock and
@@ -101,6 +105,8 @@ class Speedtest:
     ping: int | None  # ms
     last_run: datetime | None
     status: str | None
+    uplink: str | None = None  # key of the uplink the test ran over
+    running: bool | None = None  # a test is in progress; None if the console does not say
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +305,7 @@ def essentials(state: NetworkState) -> tuple[Any, ...]:
     that differ nearly every time. Those are sampled by polling; a push counts
     only when an uplink, the active uplink, an address or the LTE state changes.
     """
+    speedtest = state.speedtest
     return (
         tuple(
             (u.key, u.online, u.ipv4, u.ipv6, u.link_speed, u.full_duplex)
@@ -310,6 +317,8 @@ def essentials(state: NetworkState) -> tuple[Any, ...]:
             (mac, lte.connected, lte.in_use, lte.sim_problem)
             for mac, lte in (state.lte or {}).items()
         ),
+        # A speed test that starts or finishes is a change, not jitter
+        (speedtest.last_run, speedtest.running) if speedtest else None,
     )
 
 
@@ -378,7 +387,7 @@ def parse_state(
         active=active,
         last_transition=_timestamp_ms(raw.get("last_lte_failover_transition_timestamp")),
         latency=latency,
-        speedtest=_speedtest(uplink),
+        speedtest=_speedtest(uplink, raw, by_key, active),
         lte={lte.mac: lte for lte in map(parse_lte, lte_raws)} if lte_raws is not None else None,
         vpn_clients=parse_clients(clients) if clients is not None else None,
     )
@@ -577,17 +586,46 @@ def _availability(stats: dict[str, Any]) -> float | None:
     return sum(monitors) / len(monitors) if monitors else None
 
 
-def _speedtest(uplink: dict[str, Any]) -> Speedtest | None:
+def _speedtest(
+    uplink: dict[str, Any], raw: dict[str, Any], uplinks: dict[str, Uplink], active: str | None
+) -> Speedtest | None:
+    """Return the last speed test from the gateway's uplink object and its status block."""
     if not any(k in uplink for k in ("xput_down", "xput_up", "speedtest_lastrun")):
         return None
     status = uplink.get("speedtest_status")
+    progress = _dict(raw.get("speedtest-status"))
+    summary = _int(progress.get("status_summary"))
     return Speedtest(
         download=_float(uplink.get("xput_down")),
         upload=_float(uplink.get("xput_up")),
         ping=_int(uplink.get("speedtest_ping")),
         last_run=_timestamp_s(uplink.get("speedtest_lastrun")),
         status=str(status) if status else None,
+        uplink=_speedtest_uplink(progress, raw, uplinks, active),
+        running=summary == SPEEDTEST_RUNNING if summary is not None else None,
     )
+
+
+def _speedtest_uplink(
+    progress: dict[str, Any], raw: dict[str, Any], uplinks: dict[str, Uplink], active: str | None
+) -> str | None:
+    """Return the key of the uplink the last speed test ran over.
+
+    The status block names the interface (``interface_name``, or
+    ``source_interface`` as ``if!<name>``). A WAN port's ``ifname`` maps it to
+    that port's uplink; any other interface (the LTE backup routes over a
+    tunnel) is the uplink without a port. Without an interface, the uplink
+    that carries the traffic now is the best guess.
+    """
+    interface = progress.get("interface_name")
+    if not interface:
+        interface = str(progress.get("source_interface") or "").removeprefix("if!")
+    if not interface:
+        return active
+    for uplink in uplinks.values():
+        if uplink.port and _dict(raw.get(uplink.port)).get("ifname") == interface:
+            return uplink.key
+    return next((u.key for u in uplinks.values() if not u.port), active)
 
 
 def _link(port: dict[str, Any]) -> dict[str, Any]:

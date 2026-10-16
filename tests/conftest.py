@@ -87,8 +87,14 @@ def gateway(
     speed: int = 2500,
     duplex: bool = True,
     up: bool = True,
+    interface: str | None = "eth8",
+    speedtest_summary: int = 2,
 ) -> dict[str, Any]:
-    """Return the gateway's runtime object as stat/device and the websocket send it."""
+    """Return the gateway's runtime object as stat/device and the websocket send it.
+
+    ``interface`` is the one the last speed test ran over (``speedtest-status``);
+    ``speedtest_summary`` its status, 2 for finished.
+    """
     return {
         "mac": mac,
         "type": "udm",
@@ -98,6 +104,7 @@ def gateway(
         "last_wan_status": {"WAN": wan, "WAN_LTE_FAILOVER": lte},
         "last_wan_interfaces": {"WAN": {"ip": ipv4, "alive": wan == "online"}},
         "wan1": {
+            "ifname": "eth8",
             "ipv6": ["fe80::1", ipv6],
             "ip": ipv4,
             "speed": speed,
@@ -118,6 +125,18 @@ def gateway(
         "uptime_stats": {
             "WAN": {"availability": 100.0, "latency_average": latency},
             "WAN_LTE_FAILOVER": {"availability": 99.5, "latency_average": 158},
+        },
+        "speedtest-status": {
+            "interface_name": interface,
+            "source_interface": f"if!{interface}" if interface else None,
+            "rundate": SPEEDTEST_RUN,
+            "runtime": 26,
+            "status_download": speedtest_summary,
+            "status_ping": speedtest_summary,
+            "status_summary": speedtest_summary,
+            "status_upload": speedtest_summary,
+            "xput_download": download,
+            "xput_upload": 54.0,
         },
         "last_lte_failover_transition_timestamp": transition,
     }
@@ -197,6 +216,7 @@ class FakeConsole:
         self.admin_error: Exception | None = None
         self.write_error: Exception | None = None
         self.writes: list[tuple[str, str]] = []
+        self.speedtests: list[str] = []
         self.close_with_error = False
         self.detached = 0
         # Set to hold a poll's device request until the test releases it
@@ -251,6 +271,11 @@ class FakeConsole:
                 config["wan_type"] = wan_type
                 return wan_type
         return ""
+
+    async def start_speedtest(self, mac: str) -> None:
+        if self.write_error:
+            raise self.write_error
+        self.speedtests.append(mac)
 
     async def listen(
         self,

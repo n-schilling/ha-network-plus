@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
 import logging
@@ -11,7 +12,11 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    HomeAssistantError,
+    ServiceValidationError,
+)
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
@@ -207,13 +212,45 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
 
     async def async_set_wan_type(self, key: str, wan_type: str) -> None:
         """Set the WAN type of the uplink ``key`` with the admin credentials, then refresh."""
+        async with self._admin_write("console_write_failed") as client:
+            uplink = self.data.uplinks.get(key)
+            if uplink is None or uplink.config_id is None:
+                raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_wan_config")
+            kept = await client.set_wan_type(uplink.config_id, wan_type)
+        if kept != wan_type:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="console_write_failed",
+                translation_placeholders={"error": f"console kept {kept or 'nothing'}"},
+            )
+        # Not async_request_refresh: that one is debounced for 10 s, and the
+        # switch must show the new state right after the write
+        await self.async_refresh()
+
+    async def async_start_speedtest(self) -> None:
+        """Start a speed test on the gateway with the admin credentials.
+
+        It runs over the uplink that carries the traffic; the result arrives
+        with the gateway's runtime object. Refused while one is running.
+        """
+        async with self._admin_write("speedtest_not_started") as client:
+            if self.data.speedtest is not None and self.data.speedtest.running:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="speedtest_running"
+                )
+            await client.start_speedtest(self.mac)
+
+    @asynccontextmanager
+    async def _admin_write(self, failed_key: str) -> AsyncIterator[NetworkClient]:
+        """Give the admin client to a write and turn its errors into readable ones.
+
+        ``failed_key`` names the message for an error of the console that is
+        neither a rejected login nor missing rights.
+        """
         if self.admin_client is None:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_admin")
-        uplink = self.data.uplinks.get(key)
-        if uplink is None or uplink.config_id is None:
-            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_wan_config")
         try:
-            kept = await self.admin_client.set_wan_type(uplink.config_id, wan_type)
+            yield self.admin_client
         except NetworkAuthError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="admin_login_rejected"
@@ -226,18 +263,9 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         except NetworkError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN,
-                translation_key="console_write_failed",
+                translation_key=failed_key,
                 translation_placeholders={"error": str(err)},
             ) from err
-        if kept != wan_type:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="console_write_failed",
-                translation_placeholders={"error": f"console kept {kept or 'nothing'}"},
-            )
-        # Not async_request_refresh: that one is debounced for 10 s, and the
-        # switch must show the new state right after the write
-        await self.async_refresh()
 
     def _build(self) -> NetworkState:
         return parse_state(

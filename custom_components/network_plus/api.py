@@ -197,11 +197,22 @@ class NetworkClient:
         path = f"/proxy/network/api/s/{self._site}/rest/networkconf/{network_id}"
         network = await self._get_network(path, network_id)
         answer = await self._request("PUT", path, {**network, "wan_type": wan_type})
-        meta = answer.get("meta") if isinstance(answer, dict) else None
-        if not isinstance(meta, dict) or meta.get("rc") != "ok":
-            detail = meta.get("msg") if isinstance(meta, dict) else "unexpected answer"
-            raise NetworkError(f"networkconf {network_id}: write refused ({detail})")
+        _check_accepted(answer, f"networkconf {network_id}: write refused")
         return str((await self._get_network(path, network_id)).get("wan_type") or "")
+
+    async def start_speedtest(self, mac: str) -> None:
+        """Start a speed test on the gateway with ``mac``; it runs over the active uplink.
+
+        The console's device manager answers at once with ``meta.rc``; the
+        progress and the result show up in the gateway's runtime object
+        (``speedtest-status``, ``uplink.speedtest_lastrun``).
+        """
+        answer = await self._request(
+            "POST",
+            f"/proxy/network/api/s/{self._site}/cmd/devmgr",
+            {"mac": mac, "cmd": "speedtest"},
+        )
+        _check_accepted(answer, "speedtest: not started")
 
     async def _get_network(self, path: str, network_id: str) -> dict[str, Any]:
         body = await self._get(path)
@@ -277,6 +288,14 @@ async def _error_code(resp: ClientResponse) -> str:
     except ValueError:
         return ""
     return str(body.get("code") or "") if isinstance(body, dict) else ""
+
+
+def _check_accepted(answer: Any, what: str) -> None:
+    """Raise unless the console's answer to a command carries ``meta.rc`` "ok"."""
+    meta = answer.get("meta") if isinstance(answer, dict) else None
+    if not isinstance(meta, dict) or meta.get("rc") != "ok":
+        detail = meta.get("msg") if isinstance(meta, dict) else "unexpected answer"
+        raise NetworkError(f"{what} ({detail})")
 
 
 def _raise_for_status(resp: ClientResponse) -> None:

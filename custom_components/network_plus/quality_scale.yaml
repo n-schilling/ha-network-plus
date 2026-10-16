@@ -5,7 +5,9 @@ rules:
   # Bronze
   action-setup:
     status: exempt
-    comment: The integration registers no actions.
+    comment: >-
+      No service actions of its own. The switch and the button are entity
+      services; what they do is documented in the README.
   appropriate-polling:
     status: done
     comment: >-
@@ -22,7 +24,7 @@ rules:
     comment: No requirement of its own; the client (api.py) uses aiohttp.
   docs-actions:
     status: exempt
-    comment: No actions.
+    comment: No service actions; the switch and the button are described in the README.
   docs-high-level-description: done
   docs-installation-instructions: done
   docs-removal-instructions: done
@@ -39,11 +41,13 @@ rules:
   # Silver
   action-exceptions:
     status: exempt
-    comment: No actions.
+    comment: >-
+      No service actions. The switch and the button raise translated
+      HomeAssistantError and ServiceValidationError like actions would.
   config-entry-unloading: done
   docs-configuration-parameters:
-    status: exempt
-    comment: No options.
+    status: done
+    comment: The options (auto switch-back, LTE limit, expected link speeds) are in the README.
   docs-installation-parameters: done
   entity-unavailable: done
   integration-owner: done

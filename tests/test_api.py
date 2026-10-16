@@ -328,6 +328,7 @@ async def test_late_rejection_does_not_log_in_again() -> None:
 
 NETCONF = "/proxy/network/api/s/default/rest/networkconf/net-wan"
 SELF = "/api/users/self"
+DEVMGR = "/proxy/network/api/s/default/cmd/devmgr"
 
 
 async def test_can_manage_network() -> None:
@@ -390,3 +391,27 @@ async def test_set_wan_type_errors() -> None:
         await client.set_wan_type("net-wan", "disabled")
     with pytest.raises(NetworkPermissionError):
         await client.set_wan_type("net-wan", "disabled")
+
+
+async def test_start_speedtest() -> None:
+    """The device manager gets the command with the gateway's MAC and the CSRF token."""
+    session = FakeSession()
+    session.login = [FakeResponse(200, headers={"x-csrf-token": "tok-2"})]
+    session.puts[DEVMGR] = [
+        FakeResponse(200, {"meta": {"rc": "ok"}, "data": []}),
+        FakeResponse(200, {"meta": {"rc": "error", "msg": "api.err.SpeedtestInProgress"}}),
+        FakeResponse(200, "junk"),
+        FakeResponse(403, path=DEVMGR),
+    ]
+    client = _client(session)
+    await client.start_speedtest(MAC)
+    method, url, body, headers = session.writes[0]
+    assert (method, url.endswith(DEVMGR)) == ("POST", True)
+    assert body == {"mac": MAC, "cmd": "speedtest"}
+    assert headers["x-csrf-token"] == "tok-2"
+    with pytest.raises(NetworkError, match=r"not started \(api.err.SpeedtestInProgress\)"):
+        await client.start_speedtest(MAC)
+    with pytest.raises(NetworkError, match=r"not started \(unexpected answer\)"):
+        await client.start_speedtest(MAC)
+    with pytest.raises(NetworkPermissionError):
+        await client.start_speedtest(MAC)

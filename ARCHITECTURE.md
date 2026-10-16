@@ -7,27 +7,29 @@ does for its users.
 ## Scope
 
 One config entry is one UniFi OS console with its UniFi Network application.
-The integration reads. The one exception is the switch "Enforce backup uplink",
-which exists only with the admin opt-in (separate admin credentials) and
-changes exactly one thing: the WAN type of the preferred uplink. It
-complements the UniFi integration that ships with Home Assistant and does not
-touch its entities or devices.
+The integration reads. The exceptions exist only with the admin opt-in
+(separate admin credentials): the switch "Enforce backup uplink" changes
+exactly one thing, the WAN type of the preferred uplink, and the button "Run
+speed test" sends one command to the gateway. It complements the UniFi
+integration that ships with Home Assistant and does not touch its entities or
+devices.
 
 ## Data sources
 
 All endpoints are the ones the console's own web interface uses; none is a
-published API. Every request goes through `NetworkClient._get` in `api.py`, so
-a changed interface fails in one place.
+published API. Every request goes through `NetworkClient._request` in
+`api.py`, so a changed interface fails in one place.
 
 | Source | Used for | How often |
 |---|---|---|
 | `POST /api/auth/login` | Session cookie; a 401 later logs in again once | On demand |
-| `GET …/stat/device` | Runtime objects of all devices: the gateway (uplink status, addresses, speed test, monitors, the WAN ports' `speed`, `full_duplex` and `up`) and the LTE device (data usage, limits, signal, SIM flags `lte_is_sim_pin_required`, `lte_is_sim_pin_verified`, `lte_sim_pin_tries_left`) | Every 60 s |
+| `GET …/stat/device` | Runtime objects of all devices: the gateway (uplink status, addresses, speed test result in `uplink`, its progress and interface in `speedtest-status`, monitors, the WAN ports' `ifname`, `speed`, `full_duplex` and `up`) and the LTE device (data usage, limits, signal, SIM flags `lte_is_sim_pin_required`, `lte_is_sim_pin_verified`, `lte_sim_pin_tries_left`) | Every 60 s |
 | `GET …/v2/api/site/<site>/wan/enriched-configuration` | Names and failover priorities of the uplinks | Every 60 s |
 | `GET …/v2/api/site/<site>/clients/active?includeTeleport=true` | Remote clients (Teleport, VPN) | Every 60 s |
 | `wss://…/wss/s/<site>/events?clients=v2` | `device:sync` messages with the same runtime objects, about once a second | Continuous |
 | `GET /api/users/self` | Whether the admin user may change the Network configuration (`permissions["network.management"]` holds `admin`) | Config flow |
 | `GET` + `PUT …/rest/networkconf/<id>` | The switch "Enforce backup uplink": read the uplink network, write it back with `wan_type` `disabled` or the previous type. Needs the CSRF token the console hands out at login and with answers | On switching |
+| `POST …/cmd/devmgr` `{"mac": <gateway>, "cmd": "speedtest"}` | The button "Run speed test". The console answers at once with `meta.rc`; progress and result arrive in the gateway's runtime object. (`"cmd": "speedtest-status"` returns the same `speedtest-status` block on demand; not needed with the push.) | On pressing |
 
 The LTE data usage is `rx_bytes + tx_bytes` of the LTE device's runtime object.
 On the console this was developed against, that sum equals the sum of the
@@ -58,9 +60,11 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - **Push gate:** the websocket sends the gateway about once a second with
   latency values that differ nearly every time. A push updates the state only
   when `essentials()` changed: an uplink's online state or address, the active
-  uplink, the transition timestamp, or the LTE connected/in-use flags. All
-  numbers (latency, speed test, data usage, remote clients) come from the
-  60-second poll. This keeps failovers immediate and the recorder quiet.
+  uplink, the transition timestamp, the LTE connected/in-use flags, or a
+  speed test that started or finished (`running`, `last_run`). All other
+  numbers (latency, data usage, remote clients) come from the 60-second
+  poll. This keeps failovers and speed test results immediate and the
+  recorder quiet.
 - `device:sync` carries whole objects and replaces what is known;
   `device:update` carries only the changed fields (seen live: a single key)
   and is merged into the known object.
@@ -131,13 +135,25 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - **SIM problem:** PIN required but not verified, or no PIN tries left. The
   console's `lte_state` is an attribute, not interpreted: only the healthy
   values were seen live.
+- **Speed test uplink:** the gateway's `speedtest-status` names the interface
+  the last test ran over (`interface_name`, also `source_interface` as
+  `if!<name>`). A WAN port's `ifname` (`wan1.ifname` and so on) maps it to
+  that port's uplink; any other interface is the uplink without a port, the
+  LTE backup, which routes over a tunnel (`gre1` live). Without an interface
+  the active uplink is the best guess. The four speed test sensors carry the
+  key and the name as attributes, so values measured over the backup do not
+  pass for the main line's.
 
-## The admin opt-in and the switch "Enforce backup uplink"
+## The admin opt-in, the switch "Enforce backup uplink" and the button "Run speed test"
 
 - Admin features are an explicit choice at setup: a checkbox, and only then
   a second dialog for separate admin credentials. The read-only user stays
   what it is; the admin user gets its own client and session and is used
-  for nothing but the write. Without the opt-in the switch does not exist.
+  for nothing but the writes. Without the opt-in neither the switch nor the
+  button exists, and entities from an earlier opt-in are removed from the
+  registry at setup. Both writes share one path in the coordinator
+  (`_admin_write`) that turns a rejected login, missing rights (also raising
+  the repair issue) and other errors of the console into translated errors.
 - The switch's state is read, not assumed: on means the preferred uplink's
   `wan_type` is `disabled` in the console's configuration. Switching on
   remembers the previous type and the start in the entry's data, so a
@@ -162,6 +178,13 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   completes the drill without a restore time. The drill is stored in the
   entry's data, so a restart in the middle of one does not lose it; the
   entry's data is otherwise the switch's own store already.
+- **Speed test:** the button sends the device manager command the console's
+  own interface uses. The test runs over the uplink that carries the traffic;
+  the console offers no way to pick one. The button refuses while
+  `speedtest-status.status_summary` says a test is in progress. Switch on,
+  wait for the failover, press, wait for a new run time, switch off: that is
+  the README's recipe for measuring the backup, and the drill protocol counts
+  the data it costs.
 
 ## Repair issues
 
@@ -196,8 +219,10 @@ do not share them, and `async_remove_entry` drops them with the entry.
 - **No thresholds in code.** "Internet latency" is one series across
   failovers; a threshold helper or an automation decides what is slow. The
   integration sends no notifications.
-- **No actions.** Starting a speed test or anything else that writes would
-  need more than a read-only user; out of scope for now.
+- **No service actions.** The two writes are entities (the switch, the
+  button), so they appear on the gateway's device, carry its availability and
+  work with the usual tiles and automations. The command takes no uplink: a
+  test over a chosen one is not offered (see "Not verified yet").
 - **Events are derived from state**, not read from the console's event log:
   the log is polled, states arrive by push. Event types the log knows and the
   state does not (packet loss, "failed multiple times") are therefore not
@@ -253,6 +278,10 @@ while the websocket was recorded. Observed:
 
 - Whether a local API key would work instead of a user; developed and tested
   with user name and password.
+- The values of `speedtest-status.status_summary` other than 2 (finished):
+  1 is taken as running. The gateway also carries a list
+  `speedtest-pending-interfaces` (empty live), which hints at tests per
+  interface in a later console version.
 - The SIM flags in a fault: live, only a healthy SIM was seen (PIN required
   and verified, three tries left). What the console reports with a wrong PIN
   or a missing SIM, and which `lte_state` values exist, is unknown.
@@ -266,6 +295,7 @@ while the websocket was recorded. Observed:
 `tests/conftest.py` simulates the console (`FakeConsole`) and provides the
 runtime objects (`gateway()`, `lte_device()`, `teleport_client()`). The tests
 cover the client against a fake aiohttp session, the model, the config flow,
-the entities with websocket pushes and polls, and the diagnostics. CI runs
+the entities with websocket pushes and polls, the switch, the button, the
+repair issues and the diagnostics. CI runs
 ruff, mypy in strict mode, hassfest, the HACS check (once the repository is
 public) and pytest with a coverage floor of 99 %.

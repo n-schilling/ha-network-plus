@@ -26,7 +26,7 @@ from .entity import (
     add_dynamic_entities,
     remove_stale_entities,
 )
-from .model import Drill, LteBackup, Uplink
+from .model import Drill, LteBackup, NetworkState, Uplink
 
 # Sensors of the backup drill; they exist only with the admin opt-in, like the switch
 DRILL_KEYS = ("drill_last", "drill_failover_seconds", "drill_restore_seconds", "drill_data_used")
@@ -188,6 +188,11 @@ class SpeedtestSensor(NetworkPlusEntity, SensorEntity):
         value: float | int | None = getattr(speedtest, self._key) if speedtest else None
         return value
 
+    @property
+    def extra_state_attributes(self) -> dict[str, str | None]:
+        """Return the uplink the test ran over, so values of different uplinks stay apart."""
+        return _speedtest_uplink(self.coordinator.data)
+
 
 class SpeedtestLastRunSensor(NetworkPlusEntity, SensorEntity):
     """When the gateway last ran a speed test."""
@@ -207,10 +212,21 @@ class SpeedtestLastRunSensor(NetworkPlusEntity, SensorEntity):
         return speedtest.last_run if speedtest else None
 
     @property
-    def extra_state_attributes(self) -> dict[str, str | None]:
-        """Return the result of the last speed test as the gateway reports it."""
-        speedtest = self.coordinator.data.speedtest
-        return {"status": speedtest.status if speedtest else None}
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the result as the gateway reports it, whether a test runs, and the uplink."""
+        data = self.coordinator.data
+        return {
+            "status": data.speedtest.status if data.speedtest else None,
+            "running": data.speedtest.running if data.speedtest else None,
+            **_speedtest_uplink(data),
+        }
+
+
+def _speedtest_uplink(data: NetworkState) -> dict[str, str | None]:
+    """Return the key and the name of the uplink the last speed test ran over."""
+    key = data.speedtest.uplink if data.speedtest else None
+    uplink = data.uplinks.get(key) if key else None
+    return {"uplink": key.lower() if key else None, "uplink_name": uplink.name if uplink else None}
 
 
 class VpnClientsSensor(NetworkPlusEntity, SensorEntity):
