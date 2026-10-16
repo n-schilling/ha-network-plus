@@ -1,0 +1,5 @@
+# Test harness pinned to the Home Assistant release the integration is tested against
+pytest-homeassistant-custom-component==0.13.371
+ruff==0.16.10
+mypy==2.4.0
+pytest-cov==7.1.0

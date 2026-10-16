@@ -1,0 +1,40 @@
+name: Bug report
+description: Something does not work as described
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Integration version
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      description: From Settings → About.
+      placeholder: e.g. 2026.10.0
+    validations:
+      required: true
+  - type: input
+    id: gateway
+    attributes:
+      label: Gateway model and UniFi Network version
+      description: From the UniFi console or the gateway's device page in Home Assistant.
+      placeholder: e.g. UDM SE, UniFi Network 10.0
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Diagnostics or log
+      description: Download the diagnostics from the integration's page; they hold no password or address. Copied log lines can contain addresses and URLs, please check them before posting.
+      render: text
