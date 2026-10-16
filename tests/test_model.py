@@ -172,6 +172,24 @@ def test_event_name_of_vanished_uplink() -> None:
     assert event.attributes["from_uplink_name"] == "WAN2"
 
 
+def test_availability_of_a_down_uplink() -> None:
+    """Without summary values the monitors' average counts; without monitors nothing."""
+    raw = gateway(wan="offline", active="WAN_LTE_FAILOVER")
+    raw["uptime_stats"]["WAN"] = {
+        "downtime": 45,
+        "monitors": [
+            {"availability": 0.0, "target": "a", "type": "icmp"},
+            {"availability": 50.0, "target": "b", "type": "icmp"},
+            {"target": "c"},
+            "junk",
+        ],
+    }
+    wan = parse_state(raw, wan_configs()).uplinks["WAN"]
+    assert (wan.online, wan.latency, wan.availability) == (False, None, 25.0)
+    raw["uptime_stats"]["WAN"] = {"monitors": "none"}
+    assert parse_state(raw, wan_configs()).uplinks["WAN"].availability is None
+
+
 def test_speedtest() -> None:
     """The last speed test comes from the gateway's uplink object."""
     speedtest = parse_state(gateway(), wan_configs()).speedtest

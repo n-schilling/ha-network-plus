@@ -193,7 +193,7 @@ def parse_state(
             priority=priorities.get(key, 0),
             online=_online(key, value),
             latency=_int(_dict(stats.get(key)).get("latency_average")),
-            availability=_float(_dict(stats.get(key)).get("availability")),
+            availability=_availability(_dict(stats.get(key))),
             ipv4=_ipv4(_dict(interfaces.get(key)).get("ip")),
             ipv6=_public_ipv6(_dict(raw.get(_port_key(key))).get("ipv6")),
         )
@@ -339,6 +339,22 @@ def _active(raw: dict[str, Any], uplinks: dict[str, Uplink]) -> str | None:
     if isinstance(comment, str) and comment in uplinks:
         return comment
     return next((u.key for u in uplinks.values() if u.online), None)
+
+
+def _availability(stats: dict[str, Any]) -> float | None:
+    """Return the uplink's availability.
+
+    While an uplink is down the gateway drops the summary values and keeps
+    only its monitors, each with availability 0; their average is used then.
+    """
+    if (value := _float(stats.get("availability"))) is not None:
+        return value
+    monitors = [
+        v
+        for m in stats.get("monitors") or []
+        if isinstance(m, dict) and (v := _float(m.get("availability"))) is not None
+    ]
+    return sum(monitors) / len(monitors) if monitors else None
 
 
 def _speedtest(uplink: dict[str, Any]) -> Speedtest | None:

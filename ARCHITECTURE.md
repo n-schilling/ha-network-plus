@@ -104,14 +104,32 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - **Fixtures use placeholder data only** (192.0.2.x, 198.51.100.x, 2001:db8::,
   02:… MACs, neutral model names).
 
+## Verified against a provoked outage
+
+The WAN cable of the development console was pulled for about three minutes
+while the websocket was recorded. Observed:
+
+- `last_wan_status` goes `online` → `offline` → `online`; the monitors of the
+  down uplink keep `availability: 0` each, the summary values disappear.
+- `uplink.comment` names `WAN_LTE_FAILOVER` while the gateway routes over
+  LTE (interface `gre1`), and `WAN` again afterwards. `uplink.latency` does
+  not describe the LTE path then (32 ms next to 156 ms from the monitor), so
+  the monitor's value of the active uplink is used and `uplink.latency` is
+  only a fallback.
+- The LTE device's `lte_failover` flips to `true` with the failover and back
+  to `false` about 100 s after the return; it is not exposed as an entity.
+- `last_wan_interfaces.<group>.alive` lags and even flips while the port
+  comes back; it is not used. Its address stays during the outage, which is
+  what change detection across an outage needs. The port's own IPv4 and
+  global IPv6 vanish while down and return unchanged, so no address event.
+- The state over the websocket showed the failover about 25 s after the
+  console logged it, and the return at the same second.
+- The console's event log entries also arrive over the websocket as
+  `events` messages (for example the WAN interface transitions); a later
+  version could use them for event types the state does not carry.
+
 ## Not verified yet
 
-- Which values `last_wan_status` reports during a real outage. Only `online`
-  was observed; `offline`, `down`, `disconnected` and `failed` count as down,
-  anything else as unknown.
-- Whether `uplink.comment` names the LTE group while the gateway routes over
-  LTE, and whether `uplink.latency` is the LTE latency then. Without a known
-  value the first uplink that is online counts as active.
 - Whether a local API key would work instead of a user; developed and tested
   with user name and password.
 - Clients of VPN servers (WireGuard, OpenVPN, L2TP): only Teleport was
