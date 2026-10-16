@@ -94,6 +94,10 @@ Developed against a Dream Machine with UniFi Network 10.
 
 Settings → Devices & services → Add integration → Network Plus. Enter the console's address, the local user and its password. Turn off the certificate check only if the console uses a self-signed certificate.
 
+## For developers
+
+[ARCHITECTURE.md](ARCHITECTURE.md) explains the data sources, the push/poll design, the decisions taken on purpose and what is not verified yet.
+
 ## License
 
 [Apache 2.0](LICENSE)
