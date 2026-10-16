@@ -38,7 +38,7 @@ from custom_components.network_plus.const import (
 
 from .conftest import FakeConsole, gateway, lte_device, sync
 
-SWITCH = "switch.gateway_enforce_backup"
+SWITCH = "switch.gateway_enforce_backup_uplink"
 
 
 async def _turn(hass: HomeAssistant, service: str) -> None:

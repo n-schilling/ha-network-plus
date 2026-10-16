@@ -15,7 +15,7 @@
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
           "verify_ssl": "Turn off only if the console uses its own self-signed certificate.",
-          "use_admin": "For the switch \"Enforce backup\", which switches the preferred uplink off in the console. Asks for separate admin credentials in the next step; without them the integration never writes."
+          "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console. Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
       "reconfigure": {
@@ -32,7 +32,7 @@
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
           "verify_ssl": "Turn off only if the console uses its own self-signed certificate.",
-          "use_admin": "For the switch \"Enforce backup\", which switches the preferred uplink off in the console. Asks for separate admin credentials in the next step; without them the integration never writes."
+          "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console. Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
       "reauth_confirm": {
@@ -156,7 +156,7 @@
     },
     "switch": {
       "enforce_backup": {
-        "name": "Enforce backup"
+        "name": "Enforce backup uplink"
       }
     }
   },
@@ -196,8 +196,8 @@
     "step": {
       "init": {
         "data": {
-          "auto_off_minutes": "Enforce backup: switch back after",
-          "lte_limit_percent": "Enforce backup: refuse from an LTE usage of"
+          "auto_off_minutes": "Enforce backup uplink: switch back after",
+          "lte_limit_percent": "Enforce backup uplink: refuse from an LTE usage of"
         },
         "data_description": {
           "auto_off_minutes": "Minutes after which the preferred uplink is switched on again by itself. In a test, about 60 MB per minute ran over LTE.",

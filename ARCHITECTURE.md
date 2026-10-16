@@ -7,7 +7,7 @@ does for its users.
 ## Scope
 
 One config entry is one UniFi OS console with its UniFi Network application.
-The integration reads. The one exception is the switch "Enforce backup",
+The integration reads. The one exception is the switch "Enforce backup uplink",
 which exists only with the admin opt-in (separate admin credentials) and
 changes exactly one thing: the WAN type of the preferred uplink. It
 complements the UniFi integration that ships with Home Assistant and does not
@@ -27,7 +27,7 @@ a changed interface fails in one place.
 | `GET …/v2/api/site/<site>/clients/active?includeTeleport=true` | Remote clients (Teleport, VPN) | Every 60 s |
 | `wss://…/wss/s/<site>/events?clients=v2` | `device:sync` messages with the same runtime objects, about once a second | Continuous |
 | `GET /api/users/self` | Whether the admin user may change the Network configuration (`permissions["network.management"]` holds `admin`) | Config flow |
-| `GET` + `PUT …/rest/networkconf/<id>` | The switch "Enforce backup": read the uplink network, write it back with `wan_type` `disabled` or the previous type. Needs the CSRF token the console hands out at login and with answers | On switching |
+| `GET` + `PUT …/rest/networkconf/<id>` | The switch "Enforce backup uplink": read the uplink network, write it back with `wan_type` `disabled` or the previous type. Needs the CSRF token the console hands out at login and with answers | On switching |
 
 The LTE data usage is `rx_bytes + tx_bytes` of the LTE device's runtime object.
 On the console this was developed against, that sum equals the sum of the
@@ -120,7 +120,7 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - Disabled by default: latency and availability per uplink, the public
   addresses, the LTE signal. Enabled: what a dashboard or automation needs.
 
-## The admin opt-in and the switch "Enforce backup"
+## The admin opt-in and the switch "Enforce backup uplink"
 
 - Admin features are an explicit choice at setup: a checkbox, and only then
   a second dialog for separate admin credentials. The read-only user stays

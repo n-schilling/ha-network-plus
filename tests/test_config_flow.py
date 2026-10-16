@@ -191,7 +191,7 @@ async def test_reconfigure_toggles_admin(
     await hass.async_block_till_done()
     assert setup_admin_entry.data[CONF_USE_ADMIN] is False
     assert CONF_ADMIN_USERNAME not in setup_admin_entry.data
-    assert hass.states.get("switch.gateway_enforce_backup") is None
+    assert hass.states.get("switch.gateway_enforce_backup_uplink") is None
 
     result = await setup_admin_entry.start_reconfigure_flow(hass)
     result = await hass.config_entries.flow.async_configure(
@@ -204,7 +204,7 @@ async def test_reconfigure_toggles_admin(
     assert result["reason"] == "reconfigure_successful"
     await hass.async_block_till_done()
     assert setup_admin_entry.data[CONF_ADMIN_USERNAME] == "netadmin"
-    assert hass.states.get("switch.gateway_enforce_backup") is not None
+    assert hass.states.get("switch.gateway_enforce_backup_uplink") is not None
 
 
 async def test_options(hass: HomeAssistant, setup_admin_entry: MockConfigEntry) -> None:

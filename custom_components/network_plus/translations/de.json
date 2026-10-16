@@ -15,7 +15,7 @@
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
           "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt.",
-          "use_admin": "Für den Schalter „Backup erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
+          "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
       "reconfigure": {
@@ -32,7 +32,7 @@
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
           "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt.",
-          "use_admin": "Für den Schalter „Backup erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
+          "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
       "reauth_confirm": {
@@ -156,7 +156,7 @@
     },
     "switch": {
       "enforce_backup": {
-        "name": "Backup erzwingen"
+        "name": "Backup-Leitung erzwingen"
       }
     }
   },
@@ -196,8 +196,8 @@
     "step": {
       "init": {
         "data": {
-          "auto_off_minutes": "Backup erzwingen: automatisch zurückschalten nach",
-          "lte_limit_percent": "Backup erzwingen: verweigern ab LTE-Verbrauch von"
+          "auto_off_minutes": "Backup-Leitung erzwingen: automatisch zurückschalten nach",
+          "lte_limit_percent": "Backup-Leitung erzwingen: verweigern ab LTE-Verbrauch von"
         },
         "data_description": {
           "auto_off_minutes": "Minuten, nach denen die bevorzugte Leitung von selbst wieder eingeschaltet wird. Beim Test liefen rund 60 MB pro Minute über LTE.",

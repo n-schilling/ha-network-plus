@@ -1,4 +1,4 @@
-"""Switch "Enforce backup": switch the preferred uplink off so the gateway fails over.
+"""Switch "Enforce backup uplink": switch the preferred uplink off so the gateway fails over.
 
 Only with the admin opt-in. The switch guards itself: it refuses while the
 backup already carries the traffic or the LTE data plan is nearly used up,

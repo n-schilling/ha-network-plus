@@ -52,9 +52,9 @@ If the console has an LTE backup device, it gets a device of its own below the g
 
 Sensor "VPN clients": how many Teleport or VPN clients are connected right now, with their names in the attribute `clients` and the kinds in `types`. Unknown if the console does not offer the client list.
 
-### Enforce backup (admin features, opt-in)
+### Enforce backup uplink (admin features, opt-in)
 
-The integration reads by default and never writes. If you tick **Use admin features** during setup, a second dialog asks for **separate admin credentials**: a local user with the admin role for the Network application, stored apart from the read-only user. Only then the gateway gets the switch **"Enforce backup"**: on switches the preferred uplink off in the console (its WAN type becomes `disabled`), so the gateway fails over to its backup; off switches it on again. That is a way to test the failover without pulling a cable.
+The integration reads by default and never writes. If you tick **Use admin features** during setup, a second dialog asks for **separate admin credentials**: a local user with the admin role for the Network application, stored apart from the read-only user. Only then the gateway gets the switch **"Enforce backup uplink"**: on switches the preferred uplink off in the console (its WAN type becomes `disabled`), so the gateway fails over to its backup; off switches it on again. That is a way to test the failover without pulling a cable.
 
 The switch guards itself:
 
@@ -116,9 +116,9 @@ Developed against a Dream Machine with UniFi Network 10.
 | Username | A local user of the console. Create one under UniFi OS → Admins & Users with local access only and the read-only role for the Network application; accounts of UI.com do not work. |
 | Password | The password of that user. |
 | Verify the certificate | On by default. Turn it off only if the console uses its own self-signed certificate; the connection stays encrypted. |
-| Use admin features | Off by default. On, a second dialog asks for the admin credentials for the switch "Enforce backup"; see above. |
+| Use admin features | Off by default. On, a second dialog asks for the admin credentials for the switch "Enforce backup uplink"; see above. |
 
-The entry is named after the gateway. Reconfigure changes the address, the user, the certificate check or the admin opt-in; when the read-only password changes, Home Assistant asks for the new one. The options hold the two limits of "Enforce backup".
+The entry is named after the gateway. Reconfigure changes the address, the user, the certificate check or the admin opt-in; when the read-only password changes, Home Assistant asks for the new one. The options hold the two limits of "Enforce backup uplink".
 
 ## How the data is updated
 
@@ -129,7 +129,7 @@ The console's websocket pushes the gateway's state about once a second; the inte
 - Only uplinks the gateway monitors get entities; a configured but unused WAN port has none.
 - The address sensors show the uplink port's address. Behind another router this is a private address.
 - Speed tests are read, not started.
-- The only write is the switch "Enforce backup", and only with the admin opt-in.
+- The only write is the switch "Enforce backup uplink", and only with the admin opt-in.
 - Remote clients are those the console lists as connected; of VPN servers only Teleport was tested.
 - Events are derived from state changes, not from the console's event log; packet loss and "failed multiple times" are not reported.
 
