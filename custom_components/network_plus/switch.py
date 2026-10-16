@@ -15,7 +15,6 @@ from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory, Platform
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
@@ -31,7 +30,7 @@ from .const import (
     WAN_TYPE_DISABLED,
 )
 from .coordinator import NetworkConfigEntry
-from .entity import NetworkPlusEntity
+from .entity import NetworkPlusEntity, remove_stale_entities
 from .model import Uplink
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,10 +52,8 @@ async def async_setup_entry(
         async_add_entities([EnforceBackupSwitch(entry)])
         return
     # The opt-in was withdrawn: a switch from before must not linger
-    registry = er.async_get(hass)
-    unique_id = f"{entry.runtime_data.coordinator.data.gateway.mac}_enforce_backup"
-    if entity_id := registry.async_get_entity_id(Platform.SWITCH, DOMAIN, unique_id):
-        registry.async_remove(entity_id)
+    mac = entry.runtime_data.coordinator.data.gateway.mac
+    remove_stale_entities(hass, Platform.SWITCH, [f"{mac}_enforce_backup"])
 
 
 class EnforceBackupSwitch(NetworkPlusEntity, SwitchEntity):
@@ -135,6 +132,8 @@ class EnforceBackupSwitch(NetworkPlusEntity, SwitchEntity):
         previous = primary.wan_type if primary.wan_type != WAN_TYPE_DISABLED else None
         self._remember(previous or self._restore_type, dt_util.utcnow())
         await self.coordinator.async_set_wan_type(primary.key, WAN_TYPE_DISABLED)
+        # The drill protocol: the failover and the return are timed from here
+        self.coordinator.start_drill()
         self._arm(self._auto_off)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
@@ -143,7 +142,13 @@ class EnforceBackupSwitch(NetworkPlusEntity, SwitchEntity):
         if primary is None:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_wan_config")
         self._cancel()
-        await self.coordinator.async_set_wan_type(primary.key, self._restore_type)
+        # The return is timed from the switch-back, so note it before the write
+        self.coordinator.end_drill()
+        try:
+            await self.coordinator.async_set_wan_type(primary.key, self._restore_type)
+        except HomeAssistantError:
+            self.coordinator.reopen_drill()
+            raise
         self._remember(None, None)
         self.async_write_ha_state()
 

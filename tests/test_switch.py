@@ -22,6 +22,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.network_plus.api import (
@@ -31,14 +32,21 @@ from custom_components.network_plus.api import (
 )
 from custom_components.network_plus.const import (
     CONF_AUTO_OFF_MINUTES,
+    CONF_DRILL,
     CONF_ENFORCED_AT,
     CONF_ENFORCED_WAN_TYPE,
     CONF_LTE_LIMIT_PERCENT,
+    DOMAIN,
 )
 
-from .conftest import FakeConsole, gateway, lte_device, sync
+from .conftest import MAC, TRANSITION, FakeConsole, gateway, lte_device, sync
 
 SWITCH = "switch.gateway_enforce_backup_uplink"
+DRILL_LAST = "sensor.gateway_last_backup_drill"
+DRILL_FAILOVER = "sensor.gateway_backup_drill_failover_time"
+DRILL_RESTORE = "sensor.gateway_backup_drill_restore_time"
+DRILL_DATA = "sensor.gateway_backup_drill_data_used"
+EVENT = "event.gateway_internet"
 
 
 async def _turn(hass: HomeAssistant, service: str) -> None:
@@ -253,3 +261,138 @@ async def test_timer_does_nothing_when_already_off(
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert len(console.writes) == writes
+
+
+def _state(hass: HomeAssistant, entity_id: str) -> str:
+    state = hass.states.get(entity_id)
+    assert state is not None, entity_id
+    return state.state
+
+
+async def test_drill_protocol(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A drill times the failover and the return and counts the LTE data it cost."""
+    for entity_id in (DRILL_LAST, DRILL_FAILOVER, DRILL_RESTORE, DRILL_DATA):
+        assert _state(hass, entity_id) == STATE_UNKNOWN
+    assert hass.states.get(DRILL_LAST).attributes["completed"] is None  # type: ignore[union-attr]
+    await _turn(hass, SERVICE_TURN_ON)
+    started = dt_util.utcnow()
+    # Timestamp sensors render without microseconds
+    assert _state(hass, DRILL_LAST) == started.isoformat(timespec="seconds")
+    assert hass.states.get(DRILL_LAST).attributes["completed"] is False  # type: ignore[union-attr]
+    assert setup_admin_entry.data[CONF_DRILL]["usage_start"] == 1_500_000
+
+    freezer.tick(timedelta(seconds=15))
+    failed_over = gateway(wan="offline", active="WAN_LTE_FAILOVER", transition=TRANSITION + 1000)
+    console.set_gateway(failed_over)
+    await console.push(hass, sync(failed_over))
+    assert _state(hass, DRILL_FAILOVER) == "15.0"
+    assert _state(hass, DRILL_RESTORE) == STATE_UNKNOWN
+    # Data flows over LTE meanwhile
+    console.devices[2] = lte_device(rx=2_000_000, tx=500_000)
+    await _poll(hass, setup_admin_entry)
+
+    freezer.tick(timedelta(seconds=60))
+    await _turn(hass, SERVICE_TURN_OFF)
+    assert setup_admin_entry.data[CONF_DRILL]["ended_at"] == dt_util.utcnow().isoformat()
+    assert _state(hass, DRILL_RESTORE) == STATE_UNKNOWN
+    freezer.tick(timedelta(seconds=12))
+    back = gateway(transition=TRANSITION + 2000)
+    console.set_gateway(back)
+    await console.push(hass, sync(back))
+    assert _state(hass, DRILL_RESTORE) == "12.0"
+    assert float(_state(hass, DRILL_DATA)) == 1.0  # 1 000 000 bytes, shown in MB
+    last = hass.states.get(DRILL_LAST)
+    assert last.state == started.isoformat(timespec="seconds")  # type: ignore[union-attr]
+    assert last.attributes["completed"] is True  # type: ignore[union-attr]
+    assert last.attributes["data_used_bytes"] == 1_000_000  # type: ignore[union-attr]
+    event = hass.states.get(EVENT)
+    assert event.attributes["event_type"] == "drill_completed"  # type: ignore[union-attr]
+    assert event.attributes["failover_seconds"] == 15.0  # type: ignore[union-attr]
+    assert event.attributes["restore_seconds"] == 12.0  # type: ignore[union-attr]
+    assert event.attributes["data_used_bytes"] == 1_000_000  # type: ignore[union-attr]
+    # Another return changes nothing
+    await console.push(hass, sync(failed_over))
+    await console.push(hass, sync(back))
+    assert _state(hass, DRILL_RESTORE) == "12.0"
+
+
+async def test_drill_back_before_the_switch_back(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Switched back by hand in the console: the drill completes without a restore time."""
+    await _turn(hass, SERVICE_TURN_ON)
+    failed_over = gateway(wan="offline", active="WAN_LTE_FAILOVER", transition=TRANSITION + 1000)
+    console.set_gateway(failed_over)
+    await console.push(hass, sync(failed_over))
+    freezer.tick(timedelta(seconds=30))
+    await console.push(hass, sync(gateway(transition=TRANSITION + 2000)))
+    assert hass.states.get(DRILL_LAST).attributes["completed"] is True  # type: ignore[union-attr]
+    assert _state(hass, DRILL_RESTORE) == STATE_UNKNOWN
+    assert _state(hass, DRILL_FAILOVER) == "0.0"
+    assert hass.states.get(EVENT).attributes["event_type"] == "drill_completed"  # type: ignore[union-attr]
+
+
+async def test_drill_keeps_running_when_the_switch_back_fails(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A switch-back the console refuses does not end the drill."""
+    await _turn(hass, SERVICE_TURN_ON)
+    console.write_error = NetworkError("busy")
+    with pytest.raises(HomeAssistantError):
+        await _turn(hass, SERVICE_TURN_OFF)
+    assert setup_admin_entry.data[CONF_DRILL]["ended_at"] is None
+    console.write_error = None
+    await _turn(hass, SERVICE_TURN_OFF)
+    assert setup_admin_entry.data[CONF_DRILL]["ended_at"] is not None
+
+
+async def test_drill_survives_a_restart(
+    hass: HomeAssistant, console: FakeConsole, admin_entry: MockConfigEntry
+) -> None:
+    """The last drill comes back from the entry; unreadable data gives none."""
+    admin_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        admin_entry,
+        data={
+            **admin_entry.data,
+            CONF_DRILL: {
+                "started_at": "2024-01-01T12:00:00+00:00",
+                "usage_start": 10,
+                "failover_at": "2024-01-01T12:00:20+00:00",
+                "ended_at": "2024-01-01T12:05:00+00:00",
+                "restored_at": "2024-01-01T12:05:15+00:00",
+                "usage_end": 40_000_010,
+            },
+        },
+    )
+    assert await hass.config_entries.async_setup(admin_entry.entry_id)
+    await hass.async_block_till_done()
+    assert _state(hass, DRILL_LAST) == "2024-01-01T12:00:00+00:00"
+    assert _state(hass, DRILL_FAILOVER) == "20.0"
+    assert _state(hass, DRILL_RESTORE) == "15.0"
+    assert float(_state(hass, DRILL_DATA)) == 40.0
+    hass.config_entries.async_update_entry(admin_entry, data={**admin_entry.data, CONF_DRILL: "x"})
+    await hass.config_entries.async_reload(admin_entry.entry_id)
+    await hass.async_block_till_done()
+    assert _state(hass, DRILL_LAST) == STATE_UNKNOWN
+
+
+async def test_no_drill_sensors_without_admin(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """Without the admin opt-in there are no drill sensors, and old ones are removed."""
+    config_entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create("sensor", DOMAIN, f"{MAC}_drill_last", config_entry=config_entry)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(DRILL_LAST) is None
+    assert registry.async_get_entity_id("sensor", DOMAIN, f"{MAC}_drill_last") is None

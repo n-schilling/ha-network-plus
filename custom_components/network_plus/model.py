@@ -9,7 +9,7 @@ LTE device, and they never leave this module.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 import ipaddress
 import logging
@@ -46,6 +46,7 @@ EVENT_BRIEF_FAILOVER = "brief_failover"
 EVENT_UPLINK_DOWN = "uplink_down"
 EVENT_UPLINK_UP = "uplink_up"
 EVENT_PUBLIC_IP_CHANGED = "public_ip_changed"
+EVENT_DRILL_COMPLETED = "drill_completed"
 EVENT_TYPES = [
     EVENT_FAILOVER,
     EVENT_RESTORED,
@@ -53,6 +54,7 @@ EVENT_TYPES = [
     EVENT_UPLINK_DOWN,
     EVENT_UPLINK_UP,
     EVENT_PUBLIC_IP_CHANGED,
+    EVENT_DRILL_COMPLETED,
 ]
 
 
@@ -85,6 +87,9 @@ class Uplink:
     ipv6: str | None = None
     config_id: str | None = None  # the uplink network in the console's configuration
     wan_type: str | None = None  # dhcp, static, pppoe or disabled
+    port: str | None = None  # the gateway's port object (wan1, wan2); the LTE backup has none
+    link_speed: int | None = None  # Mbit/s the port negotiated; None while the link is down
+    full_duplex: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +119,10 @@ class LteBackup:
     limit_enabled: bool
     rssi: int | None  # dBm
     rsrp: int | None  # dBm
+    state: str | None = None  # lte_state as the console reports it, for example "ready"
+    sim_pin_required: bool | None = None
+    sim_pin_verified: bool | None = None
+    sim_pin_tries_left: int | None = None
 
     @property
     def usage_percent(self) -> float | None:
@@ -121,6 +130,123 @@ class LteBackup:
         if self.usage_bytes is None or not self.hard_limit or not self.limit_enabled:
             return None
         return self.usage_bytes / self.hard_limit * 100
+
+    @property
+    def sim_problem(self) -> bool | None:
+        """Return whether the SIM keeps the device from connecting.
+
+        That is a PIN the device could not verify, or no PIN tries left (the
+        SIM wants its PUK). None while the console does not report the flags.
+        """
+        if self.sim_pin_tries_left == 0:
+            return True
+        if self.sim_pin_required is None:
+            return None
+        if not self.sim_pin_required:
+            return False
+        if self.sim_pin_verified is None:
+            return None
+        return not self.sim_pin_verified
+
+
+@dataclass(frozen=True, slots=True)
+class Drill:
+    """A backup drill: the preferred uplink switched off on purpose, and what followed.
+
+    Times are Home Assistant's clock, so the durations compare across drills.
+    """
+
+    started_at: datetime  # the switch turned on
+    usage_start: int | None = None  # LTE bytes used at the start
+    failover_at: datetime | None = None  # the gateway routed over the backup
+    ended_at: datetime | None = None  # the switch turned off
+    restored_at: datetime | None = None  # the gateway routed over the preferred uplink again
+    usage_end: int | None = None
+
+    @property
+    def completed(self) -> bool:
+        """Return whether the gateway is back on the preferred uplink."""
+        return self.restored_at is not None
+
+    @property
+    def failover_seconds(self) -> float | None:
+        """Return how long the gateway took to switch to the backup."""
+        if self.failover_at is None:
+            return None
+        return max((self.failover_at - self.started_at).total_seconds(), 0.0)
+
+    @property
+    def restore_seconds(self) -> float | None:
+        """Return how long the gateway took to come back; None if it came back on its own."""
+        if self.restored_at is None or self.ended_at is None or self.restored_at < self.ended_at:
+            return None
+        return (self.restored_at - self.ended_at).total_seconds()
+
+    @property
+    def data_used(self) -> int | None:
+        """Return the LTE bytes the drill cost; None across a reset of the monthly counter."""
+        if self.usage_start is None or self.usage_end is None or self.usage_end < self.usage_start:
+            return None
+        return self.usage_end - self.usage_start
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the drill as the entry stores it."""
+        return {
+            "started_at": self.started_at.isoformat(),
+            "usage_start": self.usage_start,
+            "failover_at": self.failover_at.isoformat() if self.failover_at else None,
+            "ended_at": self.ended_at.isoformat() if self.ended_at else None,
+            "restored_at": self.restored_at.isoformat() if self.restored_at else None,
+            "usage_end": self.usage_end,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Any) -> Drill | None:
+        """Return the drill the entry stored; None if there is none or it is unreadable."""
+        if not isinstance(data, dict):
+            return None
+        started = _iso(data.get("started_at"))
+        if started is None:
+            return None
+        return cls(
+            started_at=started,
+            usage_start=_int(data.get("usage_start")),
+            failover_at=_iso(data.get("failover_at")),
+            ended_at=_iso(data.get("ended_at")),
+            restored_at=_iso(data.get("restored_at")),
+            usage_end=_int(data.get("usage_end")),
+        )
+
+    def event_attributes(self) -> dict[str, Any]:
+        """Return what the event "drill_completed" carries."""
+        return {
+            "started_at": self.started_at.isoformat(),
+            "failover_seconds": self.failover_seconds,
+            "restore_seconds": self.restore_seconds,
+            "data_used_bytes": self.data_used,
+        }
+
+
+def drill_progress(
+    drill: Drill, switches: list[UplinkEvent], now: datetime, usage: int | None
+) -> Drill:
+    """Return the drill advanced by the switches of the active uplink seen at ``now``.
+
+    The first failover marks when the gateway switched to the backup; a
+    return marks the end, with the LTE usage of that moment.
+    """
+    for event in switches:
+        if event.type == EVENT_FAILOVER and drill.failover_at is None:
+            drill = replace(drill, failover_at=now)
+        elif event.type == EVENT_RESTORED and drill.restored_at is None:
+            drill = replace(drill, restored_at=now, usage_end=usage)
+    return drill
+
+
+def lte_usage(state: NetworkState) -> int | None:
+    """Return the LTE bytes used this month over all LTE devices; None if none reports."""
+    values = [lte.usage_bytes for lte in (state.lte or {}).values() if lte.usage_bytes is not None]
+    return sum(values) if values else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,10 +300,16 @@ def essentials(state: NetworkState) -> tuple[Any, ...]:
     only when an uplink, the active uplink, an address or the LTE state changes.
     """
     return (
-        tuple((u.key, u.online, u.ipv4, u.ipv6) for u in state.uplinks.values()),
+        tuple(
+            (u.key, u.online, u.ipv4, u.ipv6, u.link_speed, u.full_duplex)
+            for u in state.uplinks.values()
+        ),
         state.active,
         state.last_transition,
-        tuple((mac, lte.connected, lte.in_use) for mac, lte in (state.lte or {}).items()),
+        tuple(
+            (mac, lte.connected, lte.in_use, lte.sim_problem)
+            for mac, lte in (state.lte or {}).items()
+        ),
     )
 
 
@@ -219,6 +351,8 @@ def parse_state(
             ipv6=_public_ipv6(_dict(raw.get(_port_key(key))).get("ipv6")),
             config_id=config_ids.get(key),
             wan_type=wan_types.get(key),
+            port=_port_key(key) or None,
+            **_link(_dict(raw.get(_port_key(key)))),
         )
         for key, value in status.items()
         if isinstance(key, str)
@@ -271,6 +405,10 @@ def parse_lte(raw: dict[str, Any]) -> LteBackup:
         limit_enabled=raw.get("lte_data_limit_enabled") is True,
         rssi=_int(raw.get("lte_rssi")),
         rsrp=_int(raw.get("lte_rsrp")),
+        state=str(raw["lte_state"]) if raw.get("lte_state") else None,
+        sim_pin_required=_yes_no(raw.get("lte_is_sim_pin_required")),
+        sim_pin_verified=_yes_no(raw.get("lte_is_sim_pin_verified")),
+        sim_pin_tries_left=_int(raw.get("lte_sim_pin_tries_left")),
     )
 
 
@@ -452,6 +590,15 @@ def _speedtest(uplink: dict[str, Any]) -> Speedtest | None:
     )
 
 
+def _link(port: dict[str, Any]) -> dict[str, Any]:
+    """Return what the port negotiated: speed in Mbit/s and duplex, nothing while it is down."""
+    speed = _int(port.get("speed"))
+    if port.get("up") is False or not speed or speed <= 0:
+        return {"link_speed": None, "full_duplex": None}
+    duplex = port.get("full_duplex")
+    return {"link_speed": speed, "full_duplex": duplex if isinstance(duplex, bool) else None}
+
+
 def _port_key(key: str) -> str:
     """Return the gateway's port object of a network group: WAN -> wan1, WAN2 -> wan2."""
     match = _WAN_GROUP.match(key)
@@ -528,6 +675,17 @@ def _timestamp_ms(value: Any) -> datetime | None:
 def _timestamp_s(value: Any) -> datetime | None:
     seconds = _int(value)
     return _timestamp(seconds) if seconds and seconds > 0 else None
+
+
+def _iso(value: Any) -> datetime | None:
+    """Return the datetime of an ISO string the entry stored; None if it is not one."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def _timestamp(seconds: float) -> datetime | None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 import logging
 from typing import Any
@@ -12,6 +12,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -24,17 +25,31 @@ from .api import (
     find_lte_devices,
     is_lte_device,
 )
-from .const import DOMAIN, RECONNECT_MAX, RECONNECT_MIN, UPDATE_INTERVAL
+from .const import (
+    CONF_DRILL,
+    DOMAIN,
+    ISSUE_ADMIN,
+    ISSUE_LTE_LIMIT,
+    ISSUE_UNREACHABLE,
+    RECONNECT_MAX,
+    RECONNECT_MIN,
+    UNREACHABLE_POLLS,
+    UPDATE_INTERVAL,
+)
 from .model import (
     EVENT_BRIEF_FAILOVER,
+    EVENT_DRILL_COMPLETED,
     SWITCH_TOLERANCE,
+    Drill,
     NetworkState,
     UplinkEvent,
     brief_failover_candidate,
     detect_active_events,
     detect_address_events,
     detect_online_events,
+    drill_progress,
     essentials,
+    lte_usage,
     normalize_mac,
     parse_state,
 )
@@ -112,8 +127,35 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._pending_brief: datetime | None = None
         # Whether the current websocket connection delivered a message
         self._received = False
+        # The running or last backup drill, as the entry stored it
+        self.drill = Drill.from_dict(entry.data.get(CONF_DRILL))
+        # Consecutive failed polls, for the repair issue "console unreachable"
+        self._failed_polls = 0
+        # LTE devices whose data limit is turned off (repair issue per device)
+        self._lte_limit_issues: set[str] = set()
 
     async def _async_update_data(self) -> NetworkState:
+        try:
+            state = await self._async_fetch()
+        except UpdateFailed:
+            self._failed_polls += 1
+            if self._failed_polls == UNREACHABLE_POLLS:
+                self._create_issue(
+                    ISSUE_UNREACHABLE,
+                    {
+                        "minutes": str(
+                            int(UNREACHABLE_POLLS * UPDATE_INTERVAL.total_seconds() // 60)
+                        )
+                    },
+                )
+            raise
+        if self._failed_polls:
+            self._failed_polls = 0
+            self._delete_issue(ISSUE_UNREACHABLE)
+        self._check_lte_limits(state)
+        return state
+
+    async def _async_fetch(self) -> NetworkState:
         self._pushed_macs.clear()
         # The three requests are independent; exceptions come back as values
         results: tuple[Any, Any, Any] = await asyncio.gather(
@@ -177,6 +219,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
                 translation_domain=DOMAIN, translation_key="admin_login_rejected"
             ) from err
         except NetworkPermissionError as err:
+            self.note_admin_permission(False, "the console refused the write")
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="admin_not_allowed"
             ) from err
@@ -200,6 +243,70 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         return parse_state(
             self._gateway_raw, self._configs, list(self._lte_raws.values()), self._clients
         )
+
+    @callback
+    def note_admin_permission(self, allowed: bool, reason: str = "") -> None:
+        """Keep or drop the repair issue that says the admin user cannot write."""
+        if allowed:
+            self._delete_issue(ISSUE_ADMIN)
+        else:
+            self._create_issue(ISSUE_ADMIN, {"reason": reason})
+
+    @callback
+    def start_drill(self) -> None:
+        """Note that the switch turned the preferred uplink off; the drill begins now."""
+        self._save_drill(Drill(started_at=dt_util.utcnow(), usage_start=lte_usage(self.data)))
+
+    @callback
+    def end_drill(self) -> None:
+        """Note that the switch turns the preferred uplink on again."""
+        if self.drill is not None and not self.drill.completed and self.drill.ended_at is None:
+            self._save_drill(replace(self.drill, ended_at=dt_util.utcnow()))
+
+    @callback
+    def reopen_drill(self) -> None:
+        """Forget the end of the drill: the console did not take the switch-back."""
+        if self.drill is not None and not self.drill.completed and self.drill.ended_at is not None:
+            self._save_drill(replace(self.drill, ended_at=None))
+
+    @callback
+    def _save_drill(self, drill: Drill) -> None:
+        """Take ``drill`` as the current one and keep it in the entry, across restarts."""
+        self.drill = drill
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, data={**self.config_entry.data, CONF_DRILL: drill.as_dict()}
+        )
+        self.async_update_listeners()
+
+    @callback
+    def _check_lte_limits(self, state: NetworkState) -> None:
+        """Raise a repair issue for every LTE device whose data limit is turned off."""
+        for mac, lte in (state.lte or {}).items():
+            if lte.limit_enabled:
+                if mac in self._lte_limit_issues:
+                    self._lte_limit_issues.discard(mac)
+                    self._delete_issue(f"{ISSUE_LTE_LIMIT}_{mac}")
+            elif mac not in self._lte_limit_issues:
+                self._lte_limit_issues.add(mac)
+                self._create_issue(f"{ISSUE_LTE_LIMIT}_{mac}", {"name": lte.name}, ISSUE_LTE_LIMIT)
+
+    @callback
+    def _create_issue(
+        self, issue_id: str, placeholders: dict[str, str], translation_key: str | None = None
+    ) -> None:
+        ir.async_create_issue(
+            self.hass,
+            DOMAIN,
+            f"{issue_id}_{self.config_entry.entry_id}",
+            is_fixable=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key=translation_key or issue_id,
+            translation_placeholders={"title": self.config_entry.title, **placeholders},
+        )
+
+    @callback
+    def _delete_issue(self, issue_id: str) -> None:
+        ir.async_delete_issue(self.hass, DOMAIN, f"{issue_id}_{self.config_entry.entry_id}")
 
     @callback
     def async_add_event_listener(self, listener: Callable[[UplinkEvent], None]) -> CALLBACK_TYPE:
@@ -226,6 +333,12 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             # A timestamp that preceded this switch was its herald, no brief failover
             self._pending_brief = None
         events += switches
+        if switches and self.drill is not None and not self.drill.completed:
+            drill = drill_progress(self.drill, switches, now, lte_usage(state))
+            if drill != self.drill:
+                self._save_drill(drill)
+                if drill.completed:
+                    events.append(UplinkEvent(EVENT_DRILL_COMPLETED, drill.event_attributes()))
         # None before the first refresh, although the type says otherwise
         previous: NetworkState | None = self.data
         if previous is not None:

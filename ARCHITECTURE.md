@@ -22,7 +22,7 @@ a changed interface fails in one place.
 | Source | Used for | How often |
 |---|---|---|
 | `POST /api/auth/login` | Session cookie; a 401 later logs in again once | On demand |
-| `GET …/stat/device` | Runtime objects of all devices: the gateway (uplink status, addresses, speed test, monitors) and the LTE device (data usage, limits, signal) | Every 60 s |
+| `GET …/stat/device` | Runtime objects of all devices: the gateway (uplink status, addresses, speed test, monitors, the WAN ports' `speed`, `full_duplex` and `up`) and the LTE device (data usage, limits, signal, SIM flags `lte_is_sim_pin_required`, `lte_is_sim_pin_verified`, `lte_sim_pin_tries_left`) | Every 60 s |
 | `GET …/v2/api/site/<site>/wan/enriched-configuration` | Names and failover priorities of the uplinks | Every 60 s |
 | `GET …/v2/api/site/<site>/clients/active?includeTeleport=true` | Remote clients (Teleport, VPN) | Every 60 s |
 | `wss://…/wss/s/<site>/events?clients=v2` | `device:sync` messages with the same runtime objects, about once a second | Continuous |
@@ -119,6 +119,18 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   uplink; "offline" is reported only when the gateway says so.
 - Disabled by default: latency and availability per uplink, the public
   addresses, the LTE signal. Enabled: what a dashboard or automation needs.
+- **Link speed:** every uplink with a port object (`wan1`, `wan2`, …; the LTE
+  backup has none) gets a diagnostic sensor with what the port negotiated.
+  The expected speed is an option per network group (`expected_speed_wan`,
+  … `_wan4`: static keys, so they have translations; the options flow shows
+  only the ports the gateway reports). The problem sensor "link slower than
+  expected" exists only for ports with an expectation and goes with it: the
+  options flow reloads the entry, and setup removes sensors without one. A
+  link that is down is unknown there, not slow. Speed and duplex are part of
+  `essentials()`, so a renegotiated link shows through the websocket.
+- **SIM problem:** PIN required but not verified, or no PIN tries left. The
+  console's `lte_state` is an attribute, not interpreted: only the healthy
+  values were seen live.
 
 ## The admin opt-in and the switch "Enforce backup uplink"
 
@@ -139,6 +151,33 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   within about 15 s and the integration reports `failover`; restoring the
   previous type brings it back as fast and reports `restored`. The port's
   link stays up during that, unlike with a pulled cable.
+- **Drill protocol:** the switch tells the coordinator when it switched the
+  uplink off (`start_drill`) and when it switches it on again (`end_drill`,
+  before the write, undone if the write fails). The coordinator advances the
+  drill from the `failover` and `restored` events it detects anyway
+  (`drill_progress` in `model.py`): the first failover marks the switch to
+  the backup, the return completes the drill with the LTE usage of that
+  moment. Times are Home Assistant's clock, so drills compare. A return
+  before the switch-back (someone switched the uplink on in the console)
+  completes the drill without a restore time. The drill is stored in the
+  entry's data, so a restart in the middle of one does not lose it; the
+  entry's data is otherwise the switch's own store already.
+
+## Repair issues
+
+Three conditions need a person and get an issue in Settings → Repairs, none
+fixable from Home Assistant. Issue IDs end with the entry ID, so two consoles
+do not share them, and `async_remove_entry` drops them with the entry.
+
+- **Console not reachable:** after `UNREACHABLE_POLLS` (15) consecutive
+  failed polls, deleted with the next successful one. Fewer failures are
+  normal (a reboot of the console) and only make the entities unavailable.
+- **LTE data limit turned off:** per LTE device, from the poll; the console
+  keeps the old limit value, which is why the integration does not use it.
+- **Admin user cannot write:** checked once per setup with
+  `can_manage_network()` (lacking role, or login rejected), and raised at
+  once when a write of the switch comes back with 403. A console that does
+  not answer the check leaves the issue as it is.
 
 ## Decisions taken on purpose
 
@@ -214,6 +253,11 @@ while the websocket was recorded. Observed:
 
 - Whether a local API key would work instead of a user; developed and tested
   with user name and password.
+- The SIM flags in a fault: live, only a healthy SIM was seen (PIN required
+  and verified, three tries left). What the console reports with a wrong PIN
+  or a missing SIM, and which `lte_state` values exist, is unknown.
+- The port fields on consoles other than the development one; there, the
+  2.5G WAN port reported `speed` 2500, `full_duplex` true, `max_speed` 10000.
 - Clients of VPN servers (WireGuard, OpenVPN, L2TP): only Teleport was
   available for a live check; types other than `WIRED`/`WIRELESS` are counted.
 

@@ -78,6 +78,12 @@
       },
       "backup_active": {
         "name": "Backup-Leitung aktiv"
+      },
+      "link_degraded": {
+        "name": "{uplink} Link langsamer als erwartet"
+      },
+      "sim_problem": {
+        "name": "SIM-Problem"
       }
     },
     "event": {
@@ -91,7 +97,8 @@
               "brief_failover": "Kurze Umschaltung",
               "uplink_down": "Leitung ausgefallen",
               "uplink_up": "Leitung wieder da",
-              "public_ip_changed": "Öffentliche Adresse geändert"
+              "public_ip_changed": "Öffentliche Adresse geändert",
+              "drill_completed": "Backup-Übung abgeschlossen"
             }
           }
         }
@@ -152,6 +159,21 @@
       },
       "lte_signal": {
         "name": "LTE-Signal"
+      },
+      "link_speed": {
+        "name": "{uplink} Link-Geschwindigkeit"
+      },
+      "drill_last": {
+        "name": "Letzte Backup-Übung"
+      },
+      "drill_failover_seconds": {
+        "name": "Backup-Übung Umschaltdauer"
+      },
+      "drill_restore_seconds": {
+        "name": "Backup-Übung Rückkehrdauer"
+      },
+      "drill_data_used": {
+        "name": "Backup-Übung Datenverbrauch"
       }
     },
     "switch": {
@@ -197,13 +219,35 @@
       "init": {
         "data": {
           "auto_off_minutes": "Backup-Leitung erzwingen: automatisch zurückschalten nach",
-          "lte_limit_percent": "Backup-Leitung erzwingen: verweigern ab LTE-Verbrauch von"
+          "lte_limit_percent": "Backup-Leitung erzwingen: verweigern ab LTE-Verbrauch von",
+          "expected_speed_wan": "Erwartete Link-Geschwindigkeit von WAN 1",
+          "expected_speed_wan2": "Erwartete Link-Geschwindigkeit von WAN 2",
+          "expected_speed_wan3": "Erwartete Link-Geschwindigkeit von WAN 3",
+          "expected_speed_wan4": "Erwartete Link-Geschwindigkeit von WAN 4"
         },
         "data_description": {
           "auto_off_minutes": "Minuten, nach denen die bevorzugte Leitung von selbst wieder eingeschaltet wird. Beim Test liefen rund 60 MB pro Minute über LTE.",
-          "lte_limit_percent": "Prozent des LTE-Datenplans, ab denen der Schalter das Einschalten verweigert."
+          "lte_limit_percent": "Prozent des LTE-Datenplans, ab denen der Schalter das Einschalten verweigert.",
+          "expected_speed_wan": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",
+          "expected_speed_wan2": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",
+          "expected_speed_wan3": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",
+          "expected_speed_wan4": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat."
         }
       }
+    }
+  },
+  "issues": {
+    "console_unreachable": {
+      "title": "{title}: Konsole nicht erreichbar",
+      "description": "Die Konsole antwortet seit {minutes} Minuten nicht; die Entitäten sind bis dahin nicht verfügbar. Prüfe die Konsole, ihre Adresse und den Weg dorthin. Die Adresse lässt sich über „Neu konfigurieren“ ändern. Der Hinweis verschwindet mit der nächsten erfolgreichen Abfrage."
+    },
+    "lte_limit_disabled": {
+      "title": "{title}: LTE-Datenlimit ausgeschaltet",
+      "description": "Das Datenlimit von {name} ist in UniFi Network ausgeschaltet. Der Sensor „LTE-Daten verbraucht“ bleibt unbekannt, und der Schalter „Backup-Leitung erzwingen“ kann nahe am Limit nicht verweigern. Schalte das Limit in UniFi Network in den Einstellungen des LTE-Geräts ein, oder ignoriere den Hinweis, wenn du keins willst."
+    },
+    "admin_not_allowed": {
+      "title": "{title}: Admin-Benutzer kann nicht schreiben",
+      "description": "Der Admin-Benutzer der Admin-Funktionen funktioniert nicht: {reason}. Der Schalter „Backup-Leitung erzwingen“ wird fehlschlagen. Gib dem Benutzer in UniFi OS die Admin-Rolle für die Network-Anwendung, oder ändere die Zugangsdaten über „Neu konfigurieren“. Der Hinweis verschwindet, sobald eine Prüfung gelingt."
     }
   }
 }

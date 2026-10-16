@@ -2,11 +2,19 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.3.0] - 2026-10-16
+
+### Added
+
+- Sensor "<uplink> link speed" per WAN port (diagnostic): what the port negotiated, in Mbit/s, with `full_duplex` as attribute.
+- Option "Expected link speed of WAN 1…4" and, for ports with a value, the binary sensor "<uplink> link slower than expected": on while the port negotiated less, or half duplex.
+- Binary sensor "SIM problem" of the LTE device: a PIN the device could not verify, or no PIN tries left.
+- Drill protocol of the switch "Enforce backup uplink": sensors "Last backup drill", "Backup drill failover time", "Backup drill restore time", "Backup drill data used", and the event type `drill_completed`. Kept across restarts.
+- Repair issues: console not reachable for 15 polls, LTE data limit turned off, admin user cannot write.
 
 ### Changed
 
-- README: new section "Using the data" with a latency helper that knows the active uplink, three automations and dashboard cards. It replaces the two examples; the threshold-helper example would have alarmed on every failover to a slower backup.
+- README: new section "Using the data" with a latency helper that knows the active uplink, three automations, an LTE signal comparison against the weekly mean, and dashboard cards. It replaces the two examples; the threshold-helper example would have alarmed on every failover to a slower backup.
 
 ## [0.2.1] - 2026-10-16
 

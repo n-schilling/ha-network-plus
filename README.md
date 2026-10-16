@@ -24,6 +24,10 @@ The built-in UniFi integration reports latency, but not whether an uplink is dow
 | Event "Internet" | `failover`, `restored`, `brief_failover`, `uplink_down`, `uplink_up`, `public_ip_changed` |
 | Sensor "Last LTE failover" (diagnostic) | When the gateway last switched to or from the LTE backup |
 | Latency and availability per uplink (diagnostic, disabled) | The gateway's own monitoring values |
+| Sensor "<uplink> link speed" (diagnostic) | What the uplink's port negotiated, in Mbit/s; unknown while the link is down. Attribute `full_duplex` |
+| Binary sensor "<uplink> link slower than expected" | Only with an expected link speed in the options: on while the port negotiated less than that, or half duplex. A link that is down is not slow; the sensor is unknown then |
+
+A port that negotiated 1000 Mbit/s on a 2.5G line is a bad cable or a bad port, and nobody notices without looking. Set the speed each WAN port should negotiate in the integration's options (one field per WAN port the gateway reports, for example 2500); the problem sensor exists only for ports with a value.
 
 Only uplinks the gateway monitors get entities; a configured but unused WAN port has none. An uplink is reported offline only when the gateway says so. If the console cannot be reached, the entities become unavailable instead.
 
@@ -47,6 +51,7 @@ If the console has an LTE backup device, it gets a device of its own below the g
 | Sensor "LTE data this month" | Bytes used this month, as the console counts them; the monthly drop is the reset |
 | Sensor "LTE data limit" (diagnostic) | The data plan set in UniFi Network; attribute `warning_bytes` is the warning limit. Unknown while the limit is turned off |
 | Sensor "LTE signal" (diagnostic, disabled) | RSSI in dBm; attribute `rsrp` |
+| Binary sensor "SIM problem" | On while the SIM keeps the device from connecting: a PIN the device could not verify, or no PIN tries left (the SIM wants its PUK). Attributes `state` and `pin_tries_left` |
 
 ### Remote clients
 
@@ -63,6 +68,17 @@ The switch guards itself:
 - errors of the console come back as readable messages.
 
 Mind the data: in a test, about 60 MB per minute ran over LTE while the backup was enforced. The attributes `enforced_since` and `auto_off_at` show what is going on.
+
+**Drill protocol.** Every use of the switch is a drill of the failover, and the integration keeps the result of the last one (across restarts):
+
+| Entity | What it shows |
+|---|---|
+| Sensor "Last backup drill" | When the drill started; attributes `completed`, `failover_seconds`, `restore_seconds`, `data_used_bytes` |
+| Sensor "Backup drill failover time" | Seconds from switching the uplink off until the gateway routed over the backup |
+| Sensor "Backup drill restore time" | Seconds from switching the uplink on again until the gateway routed over it. Unknown if the uplink was switched on by hand in the console |
+| Sensor "Backup drill data used" | LTE data the drill cost, from the console's monthly counter |
+
+The event "Internet" fires `drill_completed` with the same numbers once the gateway is back, so an automation can log the drill or compare it with the last one. Times come from Home Assistant's clock, so drills compare with each other.
 
 ## Using the data
 
@@ -153,6 +169,38 @@ actions:
 
 A second trigger with `below: 80` and a `clear_notification` removes the message after the monthly reset.
 
+### LTE signal getting worse
+
+Enable the sensor "LTE signal" (disabled by default; RSSI in dBm, closer to zero is better). An absolute threshold needs knowledge of the site; a comparison with the device's own history does not. A [statistics helper](https://www.home-assistant.io/integrations/statistics/) with the characteristic *mean* over the last 7 days gives the usual value, and a template helper says when the current one is clearly below it. Ten dB below the weekly mean is a different situation (an antenna moved, a mast off), not weather:
+
+```jinja
+# State template of a binary sensor "LTE signal degraded", device class Problem
+{{ states('sensor.lte_backup_lte_signal') | float(0)
+   < states('sensor.lte_signal_weekly_mean') | float(0) - 10 }}
+
+# Availability template
+{{ has_value('sensor.lte_backup_lte_signal') and has_value('sensor.lte_signal_weekly_mean') }}
+```
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.lte_signal_degraded
+    to: "on"
+    for: "00:30:00"
+actions:
+  - action: notify.mobile_app_phone
+    data:
+      title: LTE signal weaker than usual
+      message: >-
+        {{ states('sensor.lte_backup_lte_signal') }} dBm, usually
+        {{ states('sensor.lte_signal_weekly_mean') | round(0) }} dBm.
+      data:
+        tag: lte-signal
+```
+
+A second trigger on `off` for 30 minutes with `clear_notification` and the same tag removes the message. The binary sensor "SIM problem" is the other thing worth an automation: it is the one LTE failure a reboot does not fix.
+
 ### Dashboard
 
 Native cards are enough. The tile for the active uplink shows the uplink's name from UniFi Network and how long it has carried the traffic. The conditional card appears only while the backup is active. The gauge uses the same limits as the automation. The history graph is what the latency sensor is for: one line across failovers, with the uplinks' online state underneath.
@@ -234,6 +282,16 @@ The entry is named after the gateway. Reconfigure changes the address, the user,
 ## How the data is updated
 
 The console's websocket pushes the gateway's state about once a second; the integration applies a push at once when an uplink, the active uplink, an address or the LTE state changed. Numbers (latency, speed test, data usage, remote clients) are read every 60 seconds. If the console cannot be reached, the entities become unavailable until the next successful read.
+
+## Repair issues
+
+Three things need a hand and get a repair issue under Settings → Repairs; each goes away by itself once the cause is gone:
+
+| Issue | When | Gone when |
+|---|---|---|
+| Console not reachable | 15 polls in a row failed (about 15 minutes); the entities are unavailable meanwhile | The next poll succeeds |
+| LTE data limit turned off | An LTE device has no data limit in UniFi Network, so "LTE data used" stays unknown and the switch cannot refuse near the limit | The limit is turned on |
+| Admin user cannot write | At setup the admin user lacks the admin role or its login is rejected, or the console refused a write of the switch | A later setup finds the user working |
 
 ## Known limitations
 

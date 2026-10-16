@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo, format_mac
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import DOMAIN, EXPECTED_SPEED_OPTIONS
 from .coordinator import NetworkConfigEntry, NetworkCoordinator
 from .model import Gateway, LteBackup, NetworkState, Uplink
 
@@ -95,6 +96,25 @@ class LteEntity(CoordinatorEntity[NetworkCoordinator]):
     def available(self) -> bool:
         """Return whether the console reports the LTE device."""
         return super().available and self.lte is not None
+
+
+@callback
+def remove_stale_entities(hass: HomeAssistant, platform: str, unique_ids: Iterable[str]) -> None:
+    """Drop entities from the registry that the configuration no longer calls for.
+
+    Used when the admin opt-in was withdrawn or an expected link speed removed.
+    """
+    registry = er.async_get(hass)
+    for unique_id in unique_ids:
+        if entity_id := registry.async_get_entity_id(platform, DOMAIN, unique_id):
+            registry.async_remove(entity_id)
+
+
+def expected_speed(entry: NetworkConfigEntry, key: str) -> int | None:
+    """Return the link speed configured for the uplink ``key``, in Mbit/s; None if none."""
+    option = EXPECTED_SPEED_OPTIONS.get(key)
+    value = entry.options.get(option) if option else None
+    return int(value) if isinstance(value, int | float) and value > 0 else None
 
 
 @callback

@@ -4,18 +4,24 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from custom_components.network_plus.model import (
     EVENT_FAILOVER,
     EVENT_PUBLIC_IP_CHANGED,
     EVENT_RESTORED,
     EVENT_UPLINK_DOWN,
     EVENT_UPLINK_UP,
+    Drill,
+    UplinkEvent,
     VpnClient,
     brief_failover_candidate,
     detect_active_events,
     detect_address_events,
     detect_online_events,
+    drill_progress,
     essentials,
+    lte_usage,
     normalize_mac,
     parse_clients,
     parse_lte,
@@ -441,3 +447,124 @@ def test_brief_failover_not_for_a_seen_switch() -> None:
     assert brief_failover_candidate(before, after, seen + timedelta(seconds=1)) is None
     assert brief_failover_candidate(before, after, seen - timedelta(seconds=29)) is None
     assert brief_failover_candidate(before, after, seen - timedelta(seconds=31)) == seen
+
+
+def test_link_speed_of_the_port() -> None:
+    """The WAN port's negotiated speed and duplex; nothing while the link is down."""
+    state = parse_state(gateway(), wan_configs())
+    wan = state.uplinks["WAN"]
+    assert (wan.port, wan.link_speed, wan.full_duplex) == ("wan1", 2500, True)
+    lte = state.uplinks["WAN_LTE_FAILOVER"]
+    assert (lte.port, lte.link_speed, lte.full_duplex) == (None, None, None)
+    down = parse_state(gateway(up=False), wan_configs()).uplinks["WAN"]
+    assert (down.link_speed, down.full_duplex) == (None, None)
+    zero = parse_state(gateway(speed=0), wan_configs()).uplinks["WAN"]
+    assert zero.link_speed is None
+    raw = gateway(duplex=True)
+    raw["wan1"]["full_duplex"] = "yes"
+    assert parse_state(raw, wan_configs()).uplinks["WAN"].full_duplex is None
+    # A changed link speed is essential: a push with it updates the state
+    assert essentials(state) != essentials(parse_state(gateway(speed=1000), wan_configs()))
+
+
+@pytest.mark.parametrize(
+    ("required", "verified", "tries", "expected"),
+    [
+        (True, True, 3, False),
+        (True, False, 2, True),
+        (True, True, 0, True),
+        (False, None, None, False),
+        (None, None, None, None),
+        (True, None, 3, None),
+        ("yes", "no", "1", True),
+    ],
+)
+def test_sim_problem(
+    required: object, verified: object, tries: object, expected: bool | None
+) -> None:
+    """A PIN the device could not verify, or no tries left, is a SIM problem."""
+    lte = parse_lte(lte_device(pin_required=required, pin_verified=verified, pin_tries=tries))
+    assert lte.sim_problem is expected
+    assert lte.state == "ready"
+
+
+def test_drill_results() -> None:
+    """Durations and data of a drill, and what stays unknown."""
+    start = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
+    drill = Drill(started_at=start, usage_start=1000)
+    assert (drill.completed, drill.failover_seconds, drill.restore_seconds, drill.data_used) == (
+        False,
+        None,
+        None,
+        None,
+    )
+    done = Drill(
+        started_at=start,
+        usage_start=1000,
+        failover_at=start + timedelta(seconds=14),
+        ended_at=start + timedelta(minutes=2),
+        restored_at=start + timedelta(minutes=2, seconds=16),
+        usage_end=61_000,
+    )
+    assert done.completed is True
+    assert (done.failover_seconds, done.restore_seconds, done.data_used) == (14.0, 16.0, 60_000)
+    # Came back before the switch-back (by hand in the console): no restore time
+    manual = Drill(started_at=start, restored_at=start + timedelta(seconds=30))
+    assert manual.completed is True and manual.restore_seconds is None
+    early = Drill(
+        started_at=start,
+        ended_at=start + timedelta(seconds=40),
+        restored_at=start + timedelta(seconds=30),
+    )
+    assert early.restore_seconds is None
+    # A monthly reset in between makes the data unknown, a clock step the failover time 0
+    reset = Drill(started_at=start, usage_start=5000, usage_end=100, restored_at=start)
+    assert reset.data_used is None
+    assert Drill(started_at=start, failover_at=start - timedelta(seconds=5)).failover_seconds == 0.0
+
+
+def test_drill_stored_and_read_back() -> None:
+    """The entry stores the drill as strings and numbers; unreadable data gives no drill."""
+    start = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
+    drill = Drill(started_at=start, usage_start=7, failover_at=start + timedelta(seconds=9))
+    assert Drill.from_dict(drill.as_dict()) == drill
+    assert drill.event_attributes() == {
+        "started_at": "2024-01-01T12:00:00+00:00",
+        "failover_seconds": 9.0,
+        "restore_seconds": None,
+        "data_used_bytes": None,
+    }
+    assert Drill.from_dict(None) is None
+    assert Drill.from_dict({"usage_start": 1}) is None
+    assert Drill.from_dict({"started_at": "yesterday"}) is None
+    naive = Drill.from_dict({"started_at": "2024-01-01T12:00:00", "ended_at": 5})
+    assert naive is not None and naive.started_at == start and naive.ended_at is None
+
+
+def test_drill_progress() -> None:
+    """The first failover and the return advance the drill; anything else leaves it."""
+    start = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
+    drill = Drill(started_at=start, usage_start=100)
+    failover = UplinkEvent(EVENT_FAILOVER, {})
+    restored = UplinkEvent(EVENT_RESTORED, {})
+    at = start + timedelta(seconds=20)
+    stepped = drill_progress(drill, [failover], at, 150)
+    assert stepped.failover_at == at and stepped.usage_end is None
+    # A second failover (flapping) keeps the first time
+    assert drill_progress(stepped, [failover], at + timedelta(seconds=5), 160) == stepped
+    done = drill_progress(stepped, [restored], at + timedelta(seconds=60), 400)
+    assert done.completed and done.usage_end == 400 and done.data_used == 300
+    assert drill_progress(done, [restored], at + timedelta(seconds=90), 500) == done
+    assert drill_progress(drill, [UplinkEvent(EVENT_UPLINK_DOWN, {})], at, 1) == drill
+
+
+def test_lte_usage_over_all_devices() -> None:
+    """The usage of all LTE devices counts; none reporting gives None."""
+    state = parse_state(
+        gateway(), wan_configs(), [lte_device(), lte_device(mac="02:00:00:00:00:09", rx=10, tx=5)]
+    )
+    assert lte_usage(state) == 1_500_015
+    assert lte_usage(parse_state(gateway(), wan_configs())) is None
+    raw = lte_device()
+    del raw["rx_bytes"]
+    assert lte_usage(parse_state(gateway(), wan_configs(), [raw])) is None

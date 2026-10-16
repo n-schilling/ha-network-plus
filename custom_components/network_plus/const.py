@@ -40,3 +40,24 @@ MAX_LTE_LIMIT_PERCENT: Final = 100
 
 # The WAN type the console uses for an uplink that is switched off
 WAN_TYPE_DISABLED: Final = "disabled"
+
+# The last backup drill (the preferred uplink switched off on purpose), kept
+# in the entry so a restart neither forgets it nor loses a running one
+CONF_DRILL: Final = "drill"
+
+# Options: the link speed a WAN port should negotiate, in Mbit/s, by network group
+EXPECTED_SPEED_OPTIONS: Final[dict[str, str]] = {
+    "WAN": "expected_speed_wan",
+    "WAN2": "expected_speed_wan2",
+    "WAN3": "expected_speed_wan3",
+    "WAN4": "expected_speed_wan4",
+}
+MAX_EXPECTED_SPEED: Final = 100_000
+
+# Consecutive failed polls after which a repair issue says the console is unreachable
+UNREACHABLE_POLLS: Final = 15
+
+# Repair issues
+ISSUE_UNREACHABLE: Final = "console_unreachable"
+ISSUE_LTE_LIMIT: Final = "lte_limit_disabled"
+ISSUE_ADMIN: Final = "admin_not_allowed"

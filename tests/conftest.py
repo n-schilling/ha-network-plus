@@ -84,6 +84,9 @@ def gateway(
     ipv4: str = IPV4,
     ipv6: str = IPV6,
     download: float = 949.0,
+    speed: int = 2500,
+    duplex: bool = True,
+    up: bool = True,
 ) -> dict[str, Any]:
     """Return the gateway's runtime object as stat/device and the websocket send it."""
     return {
@@ -94,7 +97,14 @@ def gateway(
         "version": "4.0.0",
         "last_wan_status": {"WAN": wan, "WAN_LTE_FAILOVER": lte},
         "last_wan_interfaces": {"WAN": {"ip": ipv4, "alive": wan == "online"}},
-        "wan1": {"ipv6": ["fe80::1", ipv6], "ip": ipv4},
+        "wan1": {
+            "ipv6": ["fe80::1", ipv6],
+            "ip": ipv4,
+            "speed": speed,
+            "full_duplex": duplex,
+            "up": up,
+            "max_speed": 10000,
+        },
         "uplink": {
             "comment": active,
             "name": "eth8",
@@ -125,6 +135,9 @@ def lte_device(
     soft: int | None = 6_000_000_000,
     limit: bool = True,
     rssi: str = "-77",
+    pin_required: Any = True,
+    pin_verified: Any = True,
+    pin_tries: Any = 3,
 ) -> dict[str, Any]:
     """Return the LTE device's runtime object, secrets included as the console sends them."""
     return {
@@ -146,6 +159,9 @@ def lte_device(
         "lte_sim_pin": "9876",
         "lte_imei": "123456789012345",
         "lte_networkoperator": "Carrier",
+        "lte_is_sim_pin_required": pin_required,
+        "lte_is_sim_pin_verified": pin_verified,
+        "lte_sim_pin_tries_left": pin_tries,
     }
 
 
@@ -178,6 +194,7 @@ class FakeConsole:
         self.clients_error: Exception | None = None
         # Admin features: what the console answers about the user's rights and writes
         self.permissions: dict[str, list[str]] = {"network.management": ["admin"]}
+        self.admin_error: Exception | None = None
         self.write_error: Exception | None = None
         self.writes: list[tuple[str, str]] = []
         self.close_with_error = False
@@ -219,6 +236,8 @@ class FakeConsole:
         self.detached += 1
 
     async def can_manage_network(self) -> bool:
+        if self.admin_error:
+            raise self.admin_error
         if self.error:
             raise self.error
         return "admin" in self.permissions.get("network.management", [])

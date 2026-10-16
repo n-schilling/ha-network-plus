@@ -50,9 +50,17 @@ async def test_diagnostics_hold_nothing_personal(
             "limit_enabled": True,
             "rssi": -77,
             "rsrp": -112,
+            "state": "ready",
+            "sim_pin_required": True,
+            "sim_pin_verified": True,
+            "sim_pin_tries_left": 3,
         }
     ]
     assert result["vpn_clients"] == 1
+    wan = result["uplinks"][0]
+    assert (wan["port"], wan["link_speed"], wan["full_duplex"]) == ("wan1", 2500, True)
+    assert result["uplinks"][1]["port"] is None
+    assert result["drill"] is None
 
 
 async def test_diagnostics_without_lte_and_clients(

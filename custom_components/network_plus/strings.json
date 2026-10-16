@@ -78,6 +78,12 @@
       },
       "backup_active": {
         "name": "Backup uplink active"
+      },
+      "link_degraded": {
+        "name": "{uplink} link slower than expected"
+      },
+      "sim_problem": {
+        "name": "SIM problem"
       }
     },
     "event": {
@@ -91,7 +97,8 @@
               "brief_failover": "Brief failover",
               "uplink_down": "Uplink down",
               "uplink_up": "Uplink up",
-              "public_ip_changed": "Public address changed"
+              "public_ip_changed": "Public address changed",
+              "drill_completed": "Backup drill completed"
             }
           }
         }
@@ -152,6 +159,21 @@
       },
       "lte_signal": {
         "name": "LTE signal"
+      },
+      "link_speed": {
+        "name": "{uplink} link speed"
+      },
+      "drill_last": {
+        "name": "Last backup drill"
+      },
+      "drill_failover_seconds": {
+        "name": "Backup drill failover time"
+      },
+      "drill_restore_seconds": {
+        "name": "Backup drill restore time"
+      },
+      "drill_data_used": {
+        "name": "Backup drill data used"
       }
     },
     "switch": {
@@ -197,13 +219,35 @@
       "init": {
         "data": {
           "auto_off_minutes": "Enforce backup uplink: switch back after",
-          "lte_limit_percent": "Enforce backup uplink: refuse from an LTE usage of"
+          "lte_limit_percent": "Enforce backup uplink: refuse from an LTE usage of",
+          "expected_speed_wan": "Expected link speed of WAN 1",
+          "expected_speed_wan2": "Expected link speed of WAN 2",
+          "expected_speed_wan3": "Expected link speed of WAN 3",
+          "expected_speed_wan4": "Expected link speed of WAN 4"
         },
         "data_description": {
           "auto_off_minutes": "Minutes after which the preferred uplink is switched on again by itself. In a test, about 60 MB per minute ran over LTE.",
-          "lte_limit_percent": "Percent of the LTE data plan from which the switch refuses to switch on."
+          "lte_limit_percent": "Percent of the LTE data plan from which the switch refuses to switch on.",
+          "expected_speed_wan": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",
+          "expected_speed_wan2": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",
+          "expected_speed_wan3": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",
+          "expected_speed_wan4": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex."
         }
       }
+    }
+  },
+  "issues": {
+    "console_unreachable": {
+      "title": "{title}: console not reachable",
+      "description": "The console has not answered for {minutes} minutes; the entities are unavailable until it does. Check the console, its address and the way to it. The address can be changed with Reconfigure. This issue goes away with the next successful poll."
+    },
+    "lte_limit_disabled": {
+      "title": "{title}: LTE data limit turned off",
+      "description": "The data limit of {name} is turned off in UniFi Network. The sensor \"LTE data used\" stays unknown, and the switch \"Enforce backup uplink\" cannot refuse near the limit. Turn the limit on in UniFi Network under the LTE device's settings, or ignore this issue if you do not want one."
+    },
+    "admin_not_allowed": {
+      "title": "{title}: admin user cannot write",
+      "description": "The admin user of the admin features does not work: {reason}. The switch \"Enforce backup uplink\" will fail. Give the user the admin role for the Network application in UniFi OS, or change the credentials with Reconfigure. This issue goes away once a check succeeds."
     }
   }
 }

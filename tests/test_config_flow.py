@@ -216,3 +216,38 @@ async def test_options(hass: HomeAssistant, setup_admin_entry: MockConfigEntry) 
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert setup_admin_entry.options == {CONF_AUTO_OFF_MINUTES: 30, CONF_LTE_LIMIT_PERCENT: 50}
+
+
+async def test_options_expected_link_speed(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry
+) -> None:
+    """The options offer an expected speed for every WAN port the gateway reports."""
+    result = await hass.config_entries.options.async_init(setup_admin_entry.entry_id)
+    fields = {str(key) for key in result["data_schema"].schema}
+    assert "expected_speed_wan" in fields
+    assert "expected_speed_wan2" not in fields  # configured, but not monitored by the gateway
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_AUTO_OFF_MINUTES: 15, CONF_LTE_LIMIT_PERCENT: 80, "expected_speed_wan": 2500},
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert setup_admin_entry.options["expected_speed_wan"] == 2500
+    await hass.async_block_till_done()
+    # 0 withdraws the expectation
+    result = await hass.config_entries.options.async_init(setup_admin_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {CONF_AUTO_OFF_MINUTES: 15, CONF_LTE_LIMIT_PERCENT: 80, "expected_speed_wan": 0},
+    )
+    assert "expected_speed_wan" not in setup_admin_entry.options
+
+
+async def test_options_without_loaded_entry(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry
+) -> None:
+    """An entry that is not loaded offers no link speeds; nothing is known about its ports."""
+    await hass.config_entries.async_unload(setup_admin_entry.entry_id)
+    await hass.async_block_till_done()
+    result = await hass.config_entries.options.async_init(setup_admin_entry.entry_id)
+    fields = {str(key) for key in result["data_schema"].schema}
+    assert fields == {CONF_AUTO_OFF_MINUTES, CONF_LTE_LIMIT_PERCENT}

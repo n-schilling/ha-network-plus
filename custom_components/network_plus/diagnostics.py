@@ -15,10 +15,19 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_ADMIN_PASSWORD, CONF_ADMIN_USERNAME
+from .const import CONF_ADMIN_PASSWORD, CONF_ADMIN_USERNAME, CONF_DRILL, CONF_ENFORCED_AT
 from .coordinator import NetworkConfigEntry
 
-UPLINK_FIELDS = ("key", "priority", "online", "latency", "availability")
+UPLINK_FIELDS = (
+    "key",
+    "priority",
+    "online",
+    "latency",
+    "availability",
+    "port",
+    "link_speed",
+    "full_duplex",
+)
 LTE_FIELDS = (
     "connected",
     "in_use",
@@ -28,6 +37,10 @@ LTE_FIELDS = (
     "limit_enabled",
     "rssi",
     "rsrp",
+    "state",
+    "sim_pin_required",
+    "sim_pin_verified",
+    "sim_pin_tries_left",
 )
 
 
@@ -43,7 +56,16 @@ async def async_get_config_entry_diagnostics(
     return {
         "entry": async_redact_data(
             dict(entry.data),
-            {CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_ADMIN_USERNAME, CONF_ADMIN_PASSWORD},
+            {
+                CONF_HOST,
+                CONF_PASSWORD,
+                CONF_USERNAME,
+                CONF_ADMIN_USERNAME,
+                CONF_ADMIN_PASSWORD,
+                # Times
+                CONF_ENFORCED_AT,
+                CONF_DRILL,
+            },
         ),
         "options": dict(entry.options),
         "websocket_connected": coordinator.websocket_connected,
@@ -71,4 +93,12 @@ async def async_get_config_entry_diagnostics(
             for lte in (data.lte or {}).values()
         ],
         "vpn_clients": len(data.vpn_clients) if data.vpn_clients is not None else None,
+        "drill": {
+            "completed": drill.completed,
+            "failover_seconds": drill.failover_seconds,
+            "restore_seconds": drill.restore_seconds,
+            "data_used": drill.data_used,
+        }
+        if (drill := coordinator.drill)
+        else None,
     }

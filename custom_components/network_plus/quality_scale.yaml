@@ -82,9 +82,7 @@ rules:
   exception-translations: done
   icon-translations: done
   reconfiguration-flow: done
-  repair-issues:
-    status: exempt
-    comment: Nothing a user has to repair outside the config flow.
+  repair-issues: done
   stale-devices:
     status: exempt
     comment: One config entry is one gateway; removing the entry removes the device.

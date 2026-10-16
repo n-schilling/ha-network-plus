@@ -702,3 +702,77 @@ async def test_brief_failover_waits_for_a_switch_to_follow(
     console.set_gateway(gateway(transition=later))
     await _poll(hass, setup_entry)
     assert hass.states.get(EVENT).attributes["event_type"] == "brief_failover"  # type: ignore[union-attr]
+
+
+LINK_SPEED = "sensor.gateway_cable_link_speed"
+LINK_SLOW = "binary_sensor.gateway_cable_link_slower_than_expected"
+SIM = "binary_sensor.lte_backup_sim_problem"
+
+
+async def test_link_speed_sensor(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """The WAN port's negotiated speed is a diagnostic sensor; the LTE uplink has none."""
+    speed = hass.states.get(LINK_SPEED)
+    assert speed.state == "2500"  # type: ignore[union-attr]
+    assert speed.attributes["full_duplex"] is True  # type: ignore[union-attr]
+    assert speed.attributes["unit_of_measurement"] == "Mbit/s"  # type: ignore[union-attr]
+    registry = er.async_get(hass)
+    assert registry.async_get(LINK_SPEED).entity_category == er.EntityCategory.DIAGNOSTIC  # type: ignore[union-attr]
+    assert (
+        registry.async_get_entity_id("sensor", DOMAIN, f"{MAC}_link_speed_wan_lte_failover") is None
+    )
+    # Without an expected speed there is no "slower than expected" sensor
+    assert hass.states.get(LINK_SLOW) is None
+    # A renegotiated link shows at once through the websocket
+    await console.push(hass, sync(gateway(speed=1000, duplex=False)))
+    assert _state(hass, LINK_SPEED) == "1000"
+    await console.push(hass, sync(gateway(up=False)))
+    assert _state(hass, LINK_SPEED) == STATE_UNKNOWN
+
+
+async def test_link_slower_than_expected(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """With an expected speed in the options a problem sensor compares the negotiated one."""
+    config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(config_entry, options={"expected_speed_wan": 2500})
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    slow = hass.states.get(LINK_SLOW)
+    assert slow.state == "off"  # type: ignore[union-attr]
+    assert slow.attributes["expected_speed"] == 2500  # type: ignore[union-attr]
+    assert slow.attributes["link_speed"] == 2500  # type: ignore[union-attr]
+    assert slow.attributes["device_class"] == "problem"  # type: ignore[union-attr]
+    await console.push(hass, sync(gateway(speed=1000)))
+    assert _state(hass, LINK_SLOW) == "on"
+    await console.push(hass, sync(gateway(duplex=False)))
+    assert _state(hass, LINK_SLOW) == "on"
+    # A link that is down is not slow; the uplink's own sensor says offline
+    await console.push(hass, sync(gateway(up=False)))
+    assert _state(hass, LINK_SLOW) == STATE_UNKNOWN
+    # The expectation withdrawn: the sensor goes with the reload
+    hass.config_entries.async_update_entry(config_entry, options={})
+    await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(LINK_SLOW) is None
+    assert (
+        er.async_get(hass).async_get_entity_id("binary_sensor", DOMAIN, f"{MAC}_link_degraded_wan")
+        is None
+    )
+
+
+async def test_sim_problem_sensor(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """The SIM sensor is off while the PIN is verified, on when it is not or no tries are left."""
+    sim = hass.states.get(SIM)
+    assert sim.state == "off"  # type: ignore[union-attr]
+    assert sim.attributes["state"] == "ready"  # type: ignore[union-attr]
+    assert sim.attributes["pin_tries_left"] == 3  # type: ignore[union-attr]
+    await console.push(hass, sync(lte_device(pin_verified=False, pin_tries=2)))
+    assert _state(hass, SIM) == "on"
+    await console.push(hass, sync(lte_device(pin_tries=0)))
+    assert _state(hass, SIM) == "on"
+    await console.push(hass, sync(lte_device(pin_required=None, pin_verified=None, pin_tries=None)))
+    assert _state(hass, SIM) == STATE_UNKNOWN

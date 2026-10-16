@@ -9,6 +9,7 @@ import probatio
 
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigEntryState,
     ConfigFlow,
     ConfigFlowResult,
     OptionsFlowWithReload,
@@ -35,7 +36,9 @@ from .const import (
     DEFAULT_AUTO_OFF_MINUTES,
     DEFAULT_LTE_LIMIT_PERCENT,
     DOMAIN,
+    EXPECTED_SPEED_OPTIONS,
     MAX_AUTO_OFF_MINUTES,
+    MAX_EXPECTED_SPEED,
     MAX_LTE_LIMIT_PERCENT,
     MIN_AUTO_OFF_MINUTES,
     MIN_LTE_LIMIT_PERCENT,
@@ -261,20 +264,50 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class OptionsFlowHandler(OptionsFlowWithReload):
-    """How long the backup stays enforced, and from which LTE usage it is refused."""
+    """The switch's limits, and the link speed each WAN port should negotiate."""
+
+    def _speed_options(self) -> list[str]:
+        """Return the option keys of the uplinks with a port the gateway reports."""
+        entry = self.config_entry
+        if entry.state is not ConfigEntryState.LOADED:
+            return []
+        uplinks = entry.runtime_data.coordinator.data.uplinks
+        return [
+            option
+            for key, option in EXPECTED_SPEED_OPTIONS.items()
+            if (uplink := uplinks.get(key)) is not None and uplink.port
+        ]
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show the options."""
         if user_input is not None:
-            return self.async_create_entry(
-                data={
-                    CONF_AUTO_OFF_MINUTES: int(user_input[CONF_AUTO_OFF_MINUTES]),
-                    CONF_LTE_LIMIT_PERCENT: int(user_input[CONF_LTE_LIMIT_PERCENT]),
-                }
-            )
+            data: dict[str, Any] = {
+                CONF_AUTO_OFF_MINUTES: int(user_input[CONF_AUTO_OFF_MINUTES]),
+                CONF_LTE_LIMIT_PERCENT: int(user_input[CONF_LTE_LIMIT_PERCENT]),
+            }
+            for option in EXPECTED_SPEED_OPTIONS.values():
+                # 0 or empty: no expectation, the sensor goes
+                if (value := user_input.get(option)) and int(value) > 0:
+                    data[option] = int(value)
+            return self.async_create_entry(data=data)
         options = self.config_entry.options
+        speed_fields = {
+            probatio.Optional(
+                option, description={"suggested_value": options.get(option)}
+            ): NumberSelector(
+                NumberSelectorConfig(
+                    min=0,
+                    max=MAX_EXPECTED_SPEED,
+                    step=1,
+                    mode=NumberSelectorMode.BOX,
+                    unit_of_measurement="Mbit/s",
+                )
+            )
+            for option in self._speed_options()
+        }
         schema = probatio.Schema(
             {
+                **speed_fields,
                 probatio.Required(
                     CONF_AUTO_OFF_MINUTES,
                     default=options.get(CONF_AUTO_OFF_MINUTES, DEFAULT_AUTO_OFF_MINUTES),

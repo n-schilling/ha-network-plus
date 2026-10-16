@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import (
     PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     EntityCategory,
+    Platform,
     UnitOfDataRate,
     UnitOfInformation,
     UnitOfTime,
@@ -17,8 +19,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import NetworkConfigEntry
-from .entity import LteEntity, NetworkPlusEntity, UplinkEntity, add_dynamic_entities
-from .model import LteBackup, Uplink
+from .entity import (
+    LteEntity,
+    NetworkPlusEntity,
+    UplinkEntity,
+    add_dynamic_entities,
+    remove_stale_entities,
+)
+from .model import Drill, LteBackup, Uplink
+
+# Sensors of the backup drill; they exist only with the admin opt-in, like the switch
+DRILL_KEYS = ("drill_last", "drill_failover_seconds", "drill_restore_seconds", "drill_data_used")
 
 # Read-only entities of a coordinator: no limit needed
 PARALLEL_UPDATES = 0
@@ -42,14 +53,29 @@ async def async_setup_entry(
             VpnClientsSensor(entry),
         ]
     )
+    if entry.runtime_data.admin_client is not None:
+        async_add_entities(
+            [
+                DrillLastSensor(entry),
+                DrillDurationSensor(entry, "drill_failover_seconds"),
+                DrillDurationSensor(entry, "drill_restore_seconds"),
+                DrillDataSensor(entry),
+            ]
+        )
+    else:
+        mac = entry.runtime_data.coordinator.data.gateway.mac
+        remove_stale_entities(hass, Platform.SENSOR, [f"{mac}_{key}" for key in DRILL_KEYS])
 
     def _uplink(uplink: Uplink) -> list[SensorEntity]:
-        return [
+        entities: list[SensorEntity] = [
             UplinkLatencySensor(entry, uplink),
             UplinkAvailabilitySensor(entry, uplink),
             UplinkAddressSensor(entry, uplink, "ipv4"),
             UplinkAddressSensor(entry, uplink, "ipv6"),
         ]
+        if uplink.port:
+            entities.append(UplinkLinkSpeedSensor(entry, uplink))
+        return entities
 
     def _lte(lte: LteBackup) -> list[SensorEntity]:
         return [
@@ -276,6 +302,100 @@ class UplinkAddressSensor(UplinkEntity, SensorEntity):
         uplink = self.uplink
         value: str | None = getattr(uplink, self._family) if uplink else None
         return value
+
+
+class UplinkLinkSpeedSensor(UplinkEntity, SensorEntity):
+    """What the uplink's port negotiated, in Mbit/s; unknown while the link is down."""
+
+    _attr_device_class = SensorDeviceClass.DATA_RATE
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_native_unit_of_measurement = UnitOfDataRate.MEGABITS_PER_SECOND
+    _attr_suggested_display_precision = 0
+    _attr_translation_key = "link_speed"
+
+    def __init__(self, entry: NetworkConfigEntry, uplink: Uplink) -> None:
+        """Initialize the sensor."""
+        super().__init__(entry, uplink, "link_speed")
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the negotiated speed."""
+        uplink = self.uplink
+        return uplink.link_speed if uplink else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, bool | None]:
+        """Return whether the link is full duplex."""
+        uplink = self.uplink
+        return {"full_duplex": uplink.full_duplex if uplink else None}
+
+
+class DrillLastSensor(NetworkPlusEntity, SensorEntity):
+    """When the last backup drill started, with its results as attributes."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_translation_key = "drill_last"
+
+    def __init__(self, entry: NetworkConfigEntry) -> None:
+        """Initialize the sensor."""
+        super().__init__(entry, "drill_last")
+
+    @property
+    def native_value(self) -> datetime | None:
+        """Return the start of the last drill."""
+        drill = self.coordinator.drill
+        return drill.started_at if drill else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return how the drill went."""
+        drill = self.coordinator.drill
+        if drill is None:
+            return {"completed": None}
+        return {"completed": drill.completed, **drill.event_attributes()}
+
+
+class DrillDurationSensor(NetworkPlusEntity, SensorEntity):
+    """How long the last drill's failover or return took, in seconds."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_suggested_display_precision = 0
+
+    def __init__(self, entry: NetworkConfigEntry, key: str) -> None:
+        """Initialize the sensor for ``key``: drill_failover_seconds or drill_restore_seconds."""
+        super().__init__(entry, key)
+        self._attr_translation_key = key
+        self._field = "failover_seconds" if key == "drill_failover_seconds" else "restore_seconds"
+
+    @property
+    def native_value(self) -> float | None:
+        """Return the duration; None until the drill reached that step."""
+        drill: Drill | None = self.coordinator.drill
+        value: float | None = getattr(drill, self._field) if drill else None
+        return value
+
+
+class DrillDataSensor(NetworkPlusEntity, SensorEntity):
+    """LTE data the last drill cost."""
+
+    _attr_device_class = SensorDeviceClass.DATA_SIZE
+    _attr_native_unit_of_measurement = UnitOfInformation.BYTES
+    _attr_suggested_unit_of_measurement = UnitOfInformation.MEGABYTES
+    _attr_suggested_display_precision = 0
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_translation_key = "drill_data_used"
+
+    def __init__(self, entry: NetworkConfigEntry) -> None:
+        """Initialize the sensor."""
+        super().__init__(entry, "drill_data_used")
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the bytes; None until the drill completed."""
+        drill = self.coordinator.drill
+        return drill.data_used if drill else None
 
 
 class LteUsagePercentSensor(LteEntity, SensorEntity):
