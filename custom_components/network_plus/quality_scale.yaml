@@ -12,8 +12,8 @@ rules:
       Push over the console's websocket; polling every 60 s only while nothing
       changes, to fill gaps after reconnects.
   brands:
-    status: todo
-    comment: No brand images yet.
+    status: done
+    comment: Brand images ship in brand/ (served locally since Home Assistant 2026.x).
   common-modules: done
   config-flow: done
   config-flow-test-coverage: done
