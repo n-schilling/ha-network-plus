@@ -1,0 +1,112 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Eine UniFi-OS-Konsole mit Gateway hinzufügen (zum Beispiel eine Dream Machine oder ein Cloud Gateway). Nutze einen lokalen Benutzer der Konsole; die Nur-Lesen-Rolle reicht.",
+        "data": {
+          "host": "Host",
+          "username": "Benutzername",
+          "password": "Passwort",
+          "verify_ssl": "Zertifikat prüfen"
+        },
+        "data_description": {
+          "host": "IP-Adresse oder Hostname der Konsole, zum Beispiel 192.168.1.1.",
+          "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
+          "password": "Das Passwort dieses Benutzers.",
+          "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt."
+        }
+      },
+      "reconfigure": {
+        "description": "Adresse, Benutzer oder Zertifikatsprüfung ändern.",
+        "data": {
+          "host": "Host",
+          "username": "Benutzername",
+          "password": "Passwort",
+          "verify_ssl": "Zertifikat prüfen"
+        },
+        "data_description": {
+          "host": "IP-Adresse oder Hostname der Konsole, zum Beispiel 192.168.1.1.",
+          "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
+          "password": "Das Passwort dieses Benutzers.",
+          "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt."
+        }
+      },
+      "reauth_confirm": {
+        "description": "Die Konsole unter {host} hat die Anmeldung von {username} abgelehnt. Gib das aktuelle Passwort ein.",
+        "data": {
+          "password": "Passwort"
+        },
+        "data_description": {
+          "password": "Das Passwort des lokalen Benutzers."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Die Konsole antwortet nicht. Prüfe die Adresse und, falls die Konsole ein selbst signiertes Zertifikat hat, die Zertifikatsprüfung.",
+      "invalid_auth": "Die Konsole hat Benutzername oder Passwort abgelehnt.",
+      "no_gateway": "Die Konsole hat kein Gateway in ihrer UniFi-Network-Anwendung."
+    },
+    "abort": {
+      "already_configured": "Dieses Gateway ist schon eingerichtet.",
+      "reauth_successful": "Das Passwort wurde aktualisiert.",
+      "reconfigure_successful": "Die Konsole wurde aktualisiert.",
+      "wrong_gateway": "Diese Konsole hat ein anderes Gateway als das eingerichtete."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "uplink_online": {
+        "name": "{uplink}"
+      },
+      "backup_active": {
+        "name": "Backup-Leitung aktiv"
+      }
+    },
+    "event": {
+      "internet": {
+        "name": "Internet",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "failover": "Umschaltung auf eine Backup-Leitung",
+              "restored": "Zurück auf der bevorzugten Leitung",
+              "brief_failover": "Kurze Umschaltung",
+              "uplink_down": "Leitung ausgefallen",
+              "uplink_up": "Leitung wieder da"
+            }
+          }
+        }
+      }
+    },
+    "sensor": {
+      "active_uplink": {
+        "name": "Aktive Leitung",
+        "state": {
+          "wan": "WAN 1",
+          "wan2": "WAN 2",
+          "wan_lte_failover": "LTE-Backup"
+        }
+      },
+      "last_transition": {
+        "name": "Letzte LTE-Umschaltung"
+      },
+      "uplink_latency": {
+        "name": "{uplink} Latenz"
+      },
+      "uplink_availability": {
+        "name": "{uplink} Verfügbarkeit"
+      }
+    }
+  },
+  "exceptions": {
+    "invalid_auth": {
+      "message": "Die Konsole hat die Anmeldung abgelehnt."
+    },
+    "update_failed": {
+      "message": "Das Gateway konnte nicht gelesen werden: {error}"
+    },
+    "gateway_missing": {
+      "message": "Die Konsole meldet das Gateway nicht mehr."
+    }
+  }
+}

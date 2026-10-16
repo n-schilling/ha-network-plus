@@ -1,0 +1,101 @@
+# Integration quality scale, checked against the rules of Home Assistant 2026.10.
+# hassfest only validates this file for core integrations; it documents the
+# state of this custom integration rule by rule.
+rules:
+  # Bronze
+  action-setup:
+    status: exempt
+    comment: The integration registers no actions.
+  appropriate-polling:
+    status: done
+    comment: >-
+      Push over the console's websocket; polling every 60 s only while nothing
+      changes, to fill gaps after reconnects.
+  brands: todo
+  common-modules: done
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency:
+    status: exempt
+    comment: No requirement of its own; the client (api.py) uses aiohttp.
+  docs-actions:
+    status: exempt
+    comment: No actions.
+  docs-high-level-description: todo
+  docs-installation-instructions: todo
+  docs-removal-instructions: todo
+  entity-event-setup: done
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry:
+    status: done
+    comment: A gateway can be added once (unique ID: its MAC).
+
+  # Silver
+  action-exceptions:
+    status: exempt
+    comment: No actions.
+  config-entry-unloading: done
+  docs-configuration-parameters:
+    status: exempt
+    comment: No options.
+  docs-installation-parameters: todo
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow: done
+  test-coverage:
+    status: done
+    comment: CI fails below 99 %.
+
+  # Gold
+  devices: done
+  diagnostics:
+    status: done
+    comment: Without address, user, password, MAC, uplink names or failover times.
+  discovery:
+    status: todo
+    comment: The console could be found by DHCP or SSDP; not done yet.
+  discovery-update-info: todo
+  docs-data-update: todo
+  docs-examples: todo
+  docs-known-limitations: todo
+  docs-supported-devices: todo
+  docs-supported-functions: todo
+  docs-troubleshooting: todo
+  docs-use-cases: todo
+  dynamic-devices:
+    status: done
+    comment: Uplinks that appear later get their entities without a reload.
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default:
+    status: done
+    comment: Latency and availability per uplink are disabled by default.
+  entity-translations: done
+  exception-translations: done
+  icon-translations: done
+  reconfiguration-flow: done
+  repair-issues:
+    status: exempt
+    comment: Nothing a user has to repair outside the config flow.
+  stale-devices:
+    status: exempt
+    comment: One config entry is one gateway; removing the entry removes the device.
+
+  # Platinum
+  async-dependency:
+    status: done
+    comment: The client in api.py is asyncio-based.
+  inject-websession:
+    status: done
+    comment: >-
+      The client receives a session from Home Assistant's helper; it is its
+      own session because the console's login is a cookie.
+  strict-typing:
+    status: done
+    comment: mypy --strict runs in CI (mypy.ini).

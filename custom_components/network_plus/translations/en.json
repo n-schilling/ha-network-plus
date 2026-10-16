@@ -1,0 +1,112 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Add a UniFi OS console with a gateway (for example a Dream Machine or a Cloud Gateway). Use a local user of the console; the read-only role is enough.",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify the certificate"
+        },
+        "data_description": {
+          "host": "IP address or host name of the console, for example 192.168.1.1.",
+          "username": "A local user of the console, not a UI.com account.",
+          "password": "The password of that user.",
+          "verify_ssl": "Turn off only if the console uses its own self-signed certificate."
+        }
+      },
+      "reconfigure": {
+        "description": "Change the address, the user or the certificate check.",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "verify_ssl": "Verify the certificate"
+        },
+        "data_description": {
+          "host": "IP address or host name of the console, for example 192.168.1.1.",
+          "username": "A local user of the console, not a UI.com account.",
+          "password": "The password of that user.",
+          "verify_ssl": "Turn off only if the console uses its own self-signed certificate."
+        }
+      },
+      "reauth_confirm": {
+        "description": "The console at {host} rejected the login of {username}. Enter the current password.",
+        "data": {
+          "password": "Password"
+        },
+        "data_description": {
+          "password": "The password of the local user."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "The console does not answer. Check the address and, if the console has a self-signed certificate, the certificate check.",
+      "invalid_auth": "The console rejected the username or the password.",
+      "no_gateway": "The console has no gateway in its UniFi Network application."
+    },
+    "abort": {
+      "already_configured": "This gateway is already set up.",
+      "reauth_successful": "The password was updated.",
+      "reconfigure_successful": "The console was updated.",
+      "wrong_gateway": "This console has a different gateway than the one set up."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "uplink_online": {
+        "name": "{uplink}"
+      },
+      "backup_active": {
+        "name": "Backup uplink active"
+      }
+    },
+    "event": {
+      "internet": {
+        "name": "Internet",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "failover": "Failover to a backup uplink",
+              "restored": "Back on the preferred uplink",
+              "brief_failover": "Brief failover",
+              "uplink_down": "Uplink down",
+              "uplink_up": "Uplink up"
+            }
+          }
+        }
+      }
+    },
+    "sensor": {
+      "active_uplink": {
+        "name": "Active uplink",
+        "state": {
+          "wan": "WAN 1",
+          "wan2": "WAN 2",
+          "wan_lte_failover": "LTE backup"
+        }
+      },
+      "last_transition": {
+        "name": "Last LTE failover"
+      },
+      "uplink_latency": {
+        "name": "{uplink} latency"
+      },
+      "uplink_availability": {
+        "name": "{uplink} availability"
+      }
+    }
+  },
+  "exceptions": {
+    "invalid_auth": {
+      "message": "The console rejected the login."
+    },
+    "update_failed": {
+      "message": "Could not read the gateway: {error}"
+    },
+    "gateway_missing": {
+      "message": "The console no longer reports the gateway."
+    }
+  }
+}

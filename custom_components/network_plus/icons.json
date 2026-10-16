@@ -1,0 +1,32 @@
+{
+  "entity": {
+    "binary_sensor": {
+      "backup_active": {
+        "default": "mdi:swap-horizontal",
+        "state": {
+          "on": "mdi:sim-alert",
+          "off": "mdi:swap-horizontal"
+        }
+      }
+    },
+    "event": {
+      "internet": {
+        "default": "mdi:web"
+      }
+    },
+    "sensor": {
+      "active_uplink": {
+        "default": "mdi:wan"
+      },
+      "last_transition": {
+        "default": "mdi:history"
+      },
+      "uplink_latency": {
+        "default": "mdi:timer-outline"
+      },
+      "uplink_availability": {
+        "default": "mdi:percent-outline"
+      }
+    }
+  }
+}
