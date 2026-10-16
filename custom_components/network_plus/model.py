@@ -255,6 +255,9 @@ def parse_clients(clients: list[Any]) -> tuple[VpnClient, ...]:
         kind = str(client.get("type") or "").upper()
         if not kind or kind in LOCAL_CLIENT_TYPES:
             continue
+        # The console's history lists remote clients with status "offline"
+        if str(client.get("status") or "").lower() == "offline":
+            continue
         name = client.get("display_name") or client.get("name") or client.get("hostname")
         remote.append(
             VpnClient(

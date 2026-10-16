@@ -274,6 +274,7 @@ def test_parse_clients() -> None:
         {"type": "VPN", "name": "Office", "assoc_time": "soon"},
         {"type": "vpn", "hostname": "road-warrior"},
         {"type": "VPN"},
+        {"type": "TELEPORT", "display_name": "Gone", "status": "offline"},
         {"display_name": "No type"},
         "junk",
     ]
