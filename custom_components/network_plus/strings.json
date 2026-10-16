@@ -15,7 +15,7 @@
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
           "verify_ssl": "Turn off only if the console uses its own self-signed certificate.",
-          "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console, and the button \"Run speed test\". Asks for separate admin credentials in the next step; without them the integration never writes."
+          "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console, and the buttons \"Run speed test\" and \"Run speed test over backup uplink\". Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
       "reconfigure": {
@@ -32,7 +32,7 @@
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
           "verify_ssl": "Turn off only if the console uses its own self-signed certificate.",
-          "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console, and the button \"Run speed test\". Asks for separate admin credentials in the next step; without them the integration never writes."
+          "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console, and the buttons \"Run speed test\" and \"Run speed test over backup uplink\". Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
       "reauth_confirm": {
@@ -46,7 +46,7 @@
       },
       "admin": {
         "title": "Admin credentials",
-        "description": "A second local user of the console with the admin role for the Network application. It is used only to switch the preferred uplink and to start a speed test, and is stored apart from the read-only credentials.",
+        "description": "A second local user of the console with the admin role for the Network application. It is used only to switch the preferred uplink and to start speed tests, and is stored apart from the read-only credentials.",
         "data": {
           "admin_username": "Admin username",
           "admin_password": "Admin password"
@@ -89,6 +89,9 @@
     "button": {
       "run_speedtest": {
         "name": "Run speed test"
+      },
+      "run_backup_speedtest": {
+        "name": "Run speed test over backup uplink"
       }
     },
     "event": {
@@ -212,6 +215,9 @@
     "speedtest_running": {
       "message": "A speed test is already running; wait until it is finished."
     },
+    "backup_speedtest_running": {
+      "message": "A speed test over the backup uplink is already in progress."
+    },
     "admin_login_rejected": {
       "message": "The console rejected the admin credentials; check them with Reconfigure."
     },
@@ -258,7 +264,7 @@
     },
     "admin_not_allowed": {
       "title": "{title}: admin user cannot write",
-      "description": "The admin user of the admin features does not work: {reason}. The switch \"Enforce backup uplink\" and the button \"Run speed test\" will fail. Give the user the admin role for the Network application in UniFi OS, or change the credentials with Reconfigure. This issue goes away once a check succeeds."
+      "description": "The admin user of the admin features does not work: {reason}. The switch \"Enforce backup uplink\" and the speed test buttons will fail. Give the user the admin role for the Network application in UniFi OS, or change the credentials with Reconfigure. This issue goes away once a check succeeds."
     }
   }
 }

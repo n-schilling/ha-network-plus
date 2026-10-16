@@ -2,6 +2,20 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-10-16
+
+### Added
+
+- Button "Run speed test over backup uplink" (admin features only): switches the preferred uplink off, waits for the failover, runs the speed test, waits for the result and switches the uplink on again, whatever happened in between. The press returns at once; the attribute `in_progress` shows the measurement. Refuses what the switch refuses, a running test and a second measurement. The README's script recipe is replaced by this button and an automation example.
+
+### Changed
+
+- The mechanics of "Enforce backup uplink" (switching, the restore type, the automatic switch-back, the drill) moved from the switch into the coordinator, shared with the new button. Behaviour of the switch is unchanged.
+
+### Fixed
+
+- A switch-back the console refused used to cancel the automatic switch-back; the timer now stays armed and brings the preferred uplink back later.
+
 ## [0.5.0] - 2026-10-16
 
 ### Added

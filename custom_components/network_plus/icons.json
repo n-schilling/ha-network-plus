@@ -12,6 +12,9 @@
     "button": {
       "run_speedtest": {
         "default": "mdi:play-speed"
+      },
+      "run_backup_speedtest": {
+        "default": "mdi:speedometer-slow"
       }
     },
     "event": {

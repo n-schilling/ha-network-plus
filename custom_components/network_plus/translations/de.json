@@ -15,7 +15,7 @@
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
           "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt.",
-          "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet, und die Taste „Speedtest starten“. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
+          "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet, und die Tasten „Speedtest starten“ und „Speedtest über Backup-Leitung“. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
       "reconfigure": {
@@ -32,7 +32,7 @@
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
           "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt.",
-          "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet, und die Taste „Speedtest starten“. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
+          "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet, und die Tasten „Speedtest starten“ und „Speedtest über Backup-Leitung“. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
       "reauth_confirm": {
@@ -46,7 +46,7 @@
       },
       "admin": {
         "title": "Admin-Zugangsdaten",
-        "description": "Ein zweiter lokaler Benutzer der Konsole mit der Admin-Rolle für die Network-Anwendung. Er wird nur zum Schalten der bevorzugten Leitung und zum Starten eines Speedtests genutzt und getrennt von den Lese-Zugangsdaten gespeichert.",
+        "description": "Ein zweiter lokaler Benutzer der Konsole mit der Admin-Rolle für die Network-Anwendung. Er wird nur zum Schalten der bevorzugten Leitung und zum Starten von Speedtests genutzt und getrennt von den Lese-Zugangsdaten gespeichert.",
         "data": {
           "admin_username": "Admin-Benutzername",
           "admin_password": "Admin-Passwort"
@@ -89,6 +89,9 @@
     "button": {
       "run_speedtest": {
         "name": "Speedtest starten"
+      },
+      "run_backup_speedtest": {
+        "name": "Speedtest über Backup-Leitung"
       }
     },
     "event": {
@@ -212,6 +215,9 @@
     "speedtest_running": {
       "message": "Es läuft schon ein Speedtest; warte, bis er fertig ist."
     },
+    "backup_speedtest_running": {
+      "message": "Es läuft schon ein Speedtest über die Backup-Leitung."
+    },
     "admin_login_rejected": {
       "message": "Die Konsole hat die Admin-Zugangsdaten abgelehnt; prüfe sie über „Neu konfigurieren“."
     },
@@ -258,7 +264,7 @@
     },
     "admin_not_allowed": {
       "title": "{title}: Admin-Benutzer kann nicht schreiben",
-      "description": "Der Admin-Benutzer der Admin-Funktionen funktioniert nicht: {reason}. Der Schalter „Backup-Leitung erzwingen“ und die Taste „Speedtest starten“ werden fehlschlagen. Gib dem Benutzer in UniFi OS die Admin-Rolle für die Network-Anwendung, oder ändere die Zugangsdaten über „Neu konfigurieren“. Der Hinweis verschwindet, sobald eine Prüfung gelingt."
+      "description": "Der Admin-Benutzer der Admin-Funktionen funktioniert nicht: {reason}. Der Schalter „Backup-Leitung erzwingen“ und die Speedtest-Tasten werden fehlschlagen. Gib dem Benutzer in UniFi OS die Admin-Rolle für die Network-Anwendung, oder ändere die Zugangsdaten über „Neu konfigurieren“. Der Hinweis verschwindet, sobald eine Prüfung gelingt."
     }
   }
 }

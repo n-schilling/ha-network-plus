@@ -9,10 +9,10 @@ does for its users.
 One config entry is one UniFi OS console with its UniFi Network application.
 The integration reads. The exceptions exist only with the admin opt-in
 (separate admin credentials): the switch "Enforce backup uplink" changes
-exactly one thing, the WAN type of the preferred uplink, and the button "Run
-speed test" sends one command to the gateway. It complements the UniFi
-integration that ships with Home Assistant and does not touch its entities or
-devices.
+exactly one thing, the WAN type of the preferred uplink; the button "Run
+speed test" sends one command to the gateway; the button "Run speed test
+over backup uplink" combines the two. It complements the UniFi integration
+that ships with Home Assistant and does not touch its entities or devices.
 
 ## Data sources
 
@@ -167,16 +167,21 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   as the cause of their state change. The context is used once per run
   time; Home Assistant drops it from later writes after a few seconds.
 
-## The admin opt-in, the switch "Enforce backup uplink" and the button "Run speed test"
+## The admin opt-in, the switch "Enforce backup uplink" and the speed test buttons
 
 - Admin features are an explicit choice at setup: a checkbox, and only then
   a second dialog for separate admin credentials. The read-only user stays
   what it is; the admin user gets its own client and session and is used
   for nothing but the writes. Without the opt-in neither the switch nor the
-  button exists, and entities from an earlier opt-in are removed from the
-  registry at setup. Both writes share one path in the coordinator
+  buttons exist, and entities from an earlier opt-in are removed from the
+  registry at setup. All writes share one path in the coordinator
   (`_admin_write`) that turns a rejected login, missing rights (also raising
   the repair issue) and other errors of the console into translated errors.
+- The mechanics of enforcing the backup live in the coordinator
+  (`async_enforce_backup`, `async_release_backup`, the auto-off timer, the
+  guards), shared by the switch and the backup speed test; the switch is a
+  thin entity over them. A switch-back the console refuses leaves the timer
+  armed, so the uplink still comes back later.
 - The switch's state is read, not assumed: on means the preferred uplink's
   `wan_type` is `disabled` in the console's configuration. Switching on
   remembers the previous type and the start in the entry's data, so a
@@ -204,12 +209,25 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - **Speed test:** the button sends the device manager command the console's
   own interface uses. The test runs over the uplink that carries the traffic;
   the console offers no way to pick one. The button refuses while
-  `speedtest-status.status_summary` says a test is in progress. Switch on,
-  wait for the failover, press, wait for a new run time, switch off: that is
-  the README's recipe for measuring the backup, and the drill protocol counts
-  the data it costs. Verified live over the cable: the command is accepted
-  with `meta.rc` "ok", the status block shows the run within a few seconds,
-  and the result with the interface about 15 s after the start.
+  `speedtest-status.status_summary` says a test is in progress. Verified
+  live over the cable: the command is accepted with `meta.rc` "ok", the
+  status block shows the run within a few seconds, and the result with the
+  interface about 15 s after the start.
+- **Speed test over the backup uplink:** a capability of the gateway that
+  the console does not offer as one command, so the integration composes
+  it (`async_start_backup_speedtest`): the guards of the switch and of the
+  test are checked at the press, then a background task of the entry
+  enforces the backup, waits for `backup_active` (`FAILOVER_TIMEOUT`, 90 s;
+  live about 15 s), starts the test, waits for a new run time
+  (`RESULT_TIMEOUT`, 3 min; live well under one), and releases the backup
+  in a `finally`, so the uplink comes back whatever happened. Waiting uses
+  the coordinator's own listeners (`_async_wait`), not Home Assistant's
+  state machine. A timeout or a refused command is a warning in the log; the
+  drill protocol and the speed test event report what did happen. The
+  policy, when to measure and whom to tell, stays in automations. If Home
+  Assistant stops in the middle, the task is cancelled; the switch-back is
+  then up to the auto-off timer, re-armed from the entry's data at the next
+  setup.
 
 ## Repair issues
 

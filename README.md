@@ -5,7 +5,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![HACS: custom](https://img.shields.io/badge/HACS-custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories)
 
-A custom integration that adds what the UniFi integration shipped with Home Assistant does not show: uplink status and failover, latency, speed test results and a button to start one, public addresses, the LTE data plan and remote clients. It complements that integration, it does not replace it. This project is not affiliated with or endorsed by Ubiquiti.
+A custom integration that adds what the UniFi integration shipped with Home Assistant does not show: uplink status and failover, latency, speed test results and buttons to run a test, also over the backup uplink, public addresses, the LTE data plan and remote clients. It complements that integration, it does not replace it. This project is not affiliated with or endorsed by Ubiquiti.
 
 ## What it shows
 
@@ -86,7 +86,9 @@ Mind the data: in a test, about 60 MB per minute ran over LTE while the backup w
 
 The event "Internet" fires `drill_completed` with the same numbers once the gateway is back, so an automation can log the drill or compare it with the last one. Times come from Home Assistant's clock, so drills compare with each other.
 
-The button **"Run speed test"** starts a speed test on the gateway, the same one UniFi Network runs on its schedule. It runs over the uplink that carries the traffic at that moment and takes well under a minute; the four speed test sensors show the result as soon as the gateway reports it, with the uplink as attribute. The button refuses while a test is running. Together with the switch this measures the backup, see [A speed test over the backup uplink](#a-speed-test-over-the-backup-uplink).
+The button **"Run speed test"** starts a speed test on the gateway, the same one UniFi Network runs on its schedule. It runs over the uplink that carries the traffic at that moment and takes well under a minute; the four speed test sensors show the result as soon as the gateway reports it, with the uplink as attribute. The button refuses while a test is running.
+
+The button **"Run speed test over backup uplink"** measures the backup: it switches the preferred uplink off (the switch turns on, the drill begins), waits for the gateway to fail over, runs the speed test, waits for the result and switches the preferred uplink on again, whatever happened in between. The press returns at once; the attribute `in_progress` says that the measurement is going on. The result arrives like any other, with the backup as `uplink`, and the drill protocol records the data it cost. The button refuses what the switch refuses, a running test and a second measurement. If the gateway does not fail over within 90 seconds or reports no result within 3 minutes, the uplink comes back and a warning goes to the log. See [A speed test over the backup uplink](#a-speed-test-over-the-backup-uplink) for the data cost.
 
 ## Using the data
 
@@ -211,41 +213,48 @@ A second trigger on `off` for 30 minutes with `clear_notification` and the same 
 
 ### A speed test over the backup uplink
 
-The speed test sensors normally describe the main line: the gateway runs its scheduled tests over whatever uplink is active, and that is the preferred one nearly all the time. To know what the backup delivers, switch the preferred uplink off, run a test, switch it on again. This script does that with the two admin entities; the first wait is for the failover, the second for the new result (`to:` without a value fires on the state, the run time, not on the attribute `running`):
+The speed test sensors normally describe the main line: the gateway runs its scheduled tests over whatever uplink is active, and that is the preferred one nearly all the time. To know what the backup delivers, press **"Run speed test over backup uplink"**, by hand or on a schedule:
 
 ```yaml
-alias: Speed test over the backup uplink
-sequence:
-  - action: switch.turn_on
+alias: Measure the backup uplink monthly
+triggers:
+  - trigger: time
+    at: "04:30:00"
+conditions:
+  - condition: template
+    value_template: "{{ now().day == 1 }}"
+actions:
+  - action: button.press
     target:
-      entity_id: switch.gateway_enforce_backup_uplink
-  - wait_for_trigger:
-      - trigger: state
-        entity_id: binary_sensor.gateway_backup_uplink_active
-        to: "on"
-    timeout: "00:02:00"
-  - if:
-      - condition: state
-        entity_id: binary_sensor.gateway_backup_uplink_active
-        state: "on"
-    then:
-      - action: button.press
-        target:
-          entity_id: button.gateway_run_speed_test
-      - wait_for_trigger:
-          - trigger: state
-            entity_id: sensor.gateway_last_speed_test
-            to:
-        timeout: "00:03:00"
-  - action: switch.turn_off
-    target:
-      entity_id: switch.gateway_enforce_backup_uplink
+      entity_id: button.gateway_run_speed_test_over_backup_uplink
 mode: single
 ```
 
-The result carries `uplink: wan_lte_failover` (or whatever the backup's key is), so a template or a statistics helper can filter the backup's values out of the series, for example `{{ state_attr('sensor.gateway_speed_test_download', 'uplink') == 'wan' }}` as a condition before a value is taken as the main line's.
+The result arrives a minute or two later with `uplink: wan_lte_failover` (or whatever the backup's key is) and as an entry in the activity. An automation that wants to tell you waits for the new run time (`to:` without a value fires on the state, not on the attribute `running`) and checks the uplink:
 
-**Mind the data.** A speed test moves data at full speed for some seconds in each direction. Over a mobile backup that is a noticeable share of a data plan, typically some tens to a few hundred megabytes, on top of what the drill itself costs; the sensor "Backup drill data used" shows the sum afterwards. The switch refuses from the configured share of the data plan on, and the drill ends by itself after the configured time (*switch back after*) even if the script stops halfway.
+```yaml
+triggers:
+  - trigger: state
+    entity_id: sensor.gateway_last_speed_test
+    to:
+conditions:
+  - condition: state
+    entity_id: sensor.gateway_last_speed_test
+    attribute: uplink
+    state: wan_lte_failover
+actions:
+  - action: notify.mobile_app_phone
+    data:
+      title: Backup uplink measured
+      message: >-
+        {{ states('sensor.gateway_speed_test_download') | round(0) }} Mbit/s down,
+        {{ states('sensor.gateway_speed_test_upload') | round(0) }} Mbit/s up,
+        {{ states('sensor.gateway_speed_test_ping') }} ms.
+```
+
+The same attribute keeps the backup's values out of the main line's series, for example `{{ state_attr('sensor.gateway_speed_test_download', 'uplink') == 'wan' }}` as a condition before a value is taken as the main line's.
+
+**Mind the data.** A speed test moves data at full speed for some seconds in each direction. Over a mobile backup that is a noticeable share of a data plan, typically some tens to a few hundred megabytes, on top of what the drill itself costs; the sensor "Backup drill data used" shows the sum afterwards. The button refuses from the configured share of the data plan on, and the drill ends by itself after the configured time (*switch back after*) even if Home Assistant restarts in the middle.
 
 ### Dashboard
 
@@ -289,7 +298,7 @@ Native cards are enough. The tile for the active uplink shows the uplink's name 
     - state
 ```
 
-With admin features, the switch and the button ask before they act:
+With admin features, the switch and the buttons ask before they act:
 
 ```yaml
 - type: tile
@@ -307,6 +316,15 @@ With admin features, the switch and the button ask before they act:
       entity_id: button.gateway_run_speed_test
     confirmation:
       text: Start a speed test on the gateway?
+- type: tile
+  entity: button.gateway_run_speed_test_over_backup_uplink
+  tap_action:
+    action: perform-action
+    perform_action: button.press
+    target:
+      entity_id: button.gateway_run_speed_test_over_backup_uplink
+    confirmation:
+      text: Switch to the backup uplink and measure it? This costs mobile data.
 ```
 
 ## Requirements
@@ -330,7 +348,7 @@ Developed against a Dream Machine with UniFi Network 10.
 | Username | A local user of the console. Create one under UniFi OS → Admins & Users with local access only and the read-only role for the Network application; accounts of UI.com do not work. |
 | Password | The password of that user. |
 | Verify the certificate | On by default. Turn it off only if the console uses its own self-signed certificate; the connection stays encrypted. |
-| Use admin features | Off by default. On, a second dialog asks for the admin credentials for the switch "Enforce backup uplink" and the button "Run speed test"; see above. |
+| Use admin features | Off by default. On, a second dialog asks for the admin credentials for the switch "Enforce backup uplink" and the two speed test buttons; see above. |
 
 The entry is named after the gateway. Reconfigure changes the address, the user, the certificate check or the admin opt-in; when the read-only password changes, Home Assistant asks for the new one. The options hold the two limits of "Enforce backup uplink".
 
@@ -346,13 +364,13 @@ Three things need a hand and get a repair issue under Settings → Repairs; each
 |---|---|---|
 | Console not reachable | 15 polls in a row failed (about 15 minutes); the entities are unavailable meanwhile | The next poll succeeds |
 | LTE data limit turned off | An LTE device has no data limit in UniFi Network, so "LTE data used" stays unknown and the switch cannot refuse near the limit | The limit is turned on |
-| Admin user cannot write | At setup the admin user lacks the admin role or its login is rejected, or the console refused a write of the switch or the button | A later setup finds the user working |
+| Admin user cannot write | At setup the admin user lacks the admin role or its login is rejected, or the console refused a write of the switch or a button | A later setup finds the user working |
 
 ## Known limitations
 
 - Only uplinks the gateway monitors get entities; a configured but unused WAN port has none.
 - The address sensors show the uplink port's address. Behind another router this is a private address.
-- The only writes are the switch "Enforce backup uplink" and the button "Run speed test", and only with the admin opt-in. A speed test runs over the active uplink; the console offers no way to pick one.
+- The only writes are the switch "Enforce backup uplink" and the two speed test buttons, and only with the admin opt-in. A speed test runs over the active uplink; the console offers no way to pick one, which is why the backup is measured by switching the preferred uplink off.
 - Remote clients are those the console lists as connected; of VPN servers only Teleport was tested.
 - Events are derived from state changes, not from the console's event log; packet loss and "failed multiple times" are not reported.
 

@@ -354,6 +354,25 @@ async def test_drill_keeps_running_when_the_switch_back_fails(
     assert setup_admin_entry.data[CONF_DRILL]["ended_at"] is not None
 
 
+async def test_failed_switch_off_keeps_the_timer(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A switch-off the console refuses leaves the automatic switch-back armed."""
+    await _turn(hass, SERVICE_TURN_ON)
+    console.write_error = NetworkError("busy")
+    with pytest.raises(HomeAssistantError):
+        await _turn(hass, SERVICE_TURN_OFF)
+    console.write_error = None
+    freezer.tick(timedelta(minutes=15, seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert console.writes[-1] == ("net-wan", "dhcp")
+    assert hass.states.get(SWITCH).state == STATE_OFF  # type: ignore[union-attr]
+
+
 async def test_drill_survives_a_restart(
     hass: HomeAssistant, console: FakeConsole, admin_entry: MockConfigEntry
 ) -> None:

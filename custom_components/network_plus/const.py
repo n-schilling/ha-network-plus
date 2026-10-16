@@ -40,6 +40,13 @@ MAX_LTE_LIMIT_PERCENT: Final = 100
 
 # The WAN type the console uses for an uplink that is switched off
 WAN_TYPE_DISABLED: Final = "disabled"
+# The WAN type to restore when none was recorded (a console freshly set up)
+FALLBACK_WAN_TYPE: Final = "dhcp"
+
+# Waiting times of the speed test over the backup uplink, in seconds: live,
+# the failover took about 15 s and a speed test well under a minute
+FAILOVER_TIMEOUT: Final = 90.0
+RESULT_TIMEOUT: Final = 180.0
 
 # The last backup drill (the preferred uplink switched off on purpose), kept
 # in the entry so a restart neither forgets it nor loses a running one

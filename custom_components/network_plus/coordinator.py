@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import Any
 
@@ -18,6 +18,7 @@ from homeassistant.exceptions import (
     ServiceValidationError,
 )
 from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
@@ -31,17 +32,27 @@ from .api import (
     is_lte_device,
 )
 from .const import (
+    CONF_AUTO_OFF_MINUTES,
     CONF_DRILL,
+    CONF_ENFORCED_AT,
+    CONF_ENFORCED_WAN_TYPE,
+    CONF_LTE_LIMIT_PERCENT,
     CONF_SPEEDTEST_UPLINK,
+    DEFAULT_AUTO_OFF_MINUTES,
+    DEFAULT_LTE_LIMIT_PERCENT,
     DOMAIN,
     EVENT_SPEEDTEST,
+    FAILOVER_TIMEOUT,
+    FALLBACK_WAN_TYPE,
     ISSUE_ADMIN,
     ISSUE_LTE_LIMIT,
     ISSUE_UNREACHABLE,
     RECONNECT_MAX,
     RECONNECT_MIN,
+    RESULT_TIMEOUT,
     UNREACHABLE_POLLS,
     UPDATE_INTERVAL,
+    WAN_TYPE_DISABLED,
 )
 from .model import (
     EVENT_BRIEF_FAILOVER,
@@ -50,6 +61,7 @@ from .model import (
     Drill,
     NetworkState,
     Speedtest,
+    Uplink,
     UplinkEvent,
     brief_failover_candidate,
     detect_active_events,
@@ -143,6 +155,10 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         # speed test sensors write that result in it, so the logbook names the
         # test as the cause of their state change
         self.speedtest_context: tuple[datetime, Context] | None = None
+        # The timer that switches the preferred uplink on again by itself
+        self._unsub_auto_off: CALLBACK_TYPE | None = None
+        # The running speed test over the backup uplink
+        self.backup_speedtest: asyncio.Task[None] | None = None
         # Consecutive failed polls, for the repair issue "console unreachable"
         self._failed_polls = 0
         # LTE devices whose data limit is turned off (repair issue per device)
@@ -243,11 +259,208 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         with the gateway's runtime object. Refused while one is running.
         """
         async with self._admin_write("speedtest_not_started") as client:
-            if self.data.speedtest is not None and self.data.speedtest.running:
-                raise ServiceValidationError(
-                    translation_domain=DOMAIN, translation_key="speedtest_running"
-                )
+            self._check_no_speedtest_running()
             await client.start_speedtest(self.mac)
+
+    # The switch "Enforce backup uplink": the preferred uplink switched off in
+    # the console. The type to restore and the start live in the entry's data,
+    # so a restart neither forgets what to restore nor when.
+
+    @property
+    def primary_uplink(self) -> Uplink | None:
+        """Return the uplink the gateway prefers; None while it is not reported."""
+        data = self.data
+        return data.uplinks.get(data.primary) if data.primary else None
+
+    @property
+    def backup_enforced(self) -> bool | None:
+        """Return whether the preferred uplink is switched off; None if its type is unknown."""
+        primary = self.primary_uplink
+        if primary is None or primary.wan_type is None:
+            return None
+        return primary.wan_type == WAN_TYPE_DISABLED
+
+    @property
+    def auto_off(self) -> timedelta:
+        """Return after how long the preferred uplink is switched on again by itself."""
+        return timedelta(
+            minutes=self.config_entry.options.get(CONF_AUTO_OFF_MINUTES, DEFAULT_AUTO_OFF_MINUTES)
+        )
+
+    @property
+    def restore_type(self) -> str:
+        """Return the WAN type to restore."""
+        return str(self.config_entry.data.get(CONF_ENFORCED_WAN_TYPE) or FALLBACK_WAN_TYPE)
+
+    @property
+    def enforced_at(self) -> datetime | None:
+        """Return when the enforcing started; None while it is not enforced."""
+        return dt_util.parse_datetime(str(self.config_entry.data.get(CONF_ENFORCED_AT) or ""))
+
+    async def async_enforce_backup(self) -> None:
+        """Switch the preferred uplink off, unless that would be unwise; the drill begins."""
+        primary = self._check_enforceable()
+        previous = primary.wan_type if primary.wan_type != WAN_TYPE_DISABLED else None
+        self._remember_enforced(previous or self.restore_type, dt_util.utcnow())
+        await self.async_set_wan_type(primary.key, WAN_TYPE_DISABLED)
+        # The drill protocol: the failover and the return are timed from here
+        self.start_drill()
+        self.arm_auto_off(self.auto_off)
+
+    async def async_release_backup(self) -> None:
+        """Switch the preferred uplink on again."""
+        primary = self.primary_uplink
+        if primary is None:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_wan_config")
+        # The return is timed from the switch-back, so note it before the write
+        self.end_drill()
+        try:
+            await self.async_set_wan_type(primary.key, self.restore_type)
+        except HomeAssistantError:
+            # The timer stays armed: it tries again later
+            self.reopen_drill()
+            raise
+        self.cancel_auto_off()
+        self._remember_enforced(None, None)
+        self.async_update_listeners()
+
+    def _check_enforceable(self) -> Uplink:
+        """Return the preferred uplink if switching it off is wise now; raise otherwise."""
+        data = self.data
+        primary = self.primary_uplink
+        if primary is None:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_wan_config")
+        if data.backup_active:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="backup_already_active"
+            )
+        limit = self.config_entry.options.get(CONF_LTE_LIMIT_PERCENT, DEFAULT_LTE_LIMIT_PERCENT)
+        for lte in (data.lte or {}).values():
+            if lte.usage_percent is not None and lte.usage_percent >= limit:
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN,
+                    translation_key="lte_data_plan_used",
+                    translation_placeholders={
+                        "percent": f"{lte.usage_percent:.0f}",
+                        "limit": str(limit),
+                    },
+                )
+        return primary
+
+    def _check_no_speedtest_running(self) -> None:
+        if self.data.speedtest is not None and self.data.speedtest.running:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="speedtest_running"
+            )
+
+    @callback
+    def _remember_enforced(self, wan_type: str | None, started: datetime | None) -> None:
+        """Keep the WAN type to restore and the start in the entry, across restarts."""
+        data = {
+            k: v
+            for k, v in self.config_entry.data.items()
+            if k not in (CONF_ENFORCED_WAN_TYPE, CONF_ENFORCED_AT)
+        }
+        if wan_type is not None and started is not None:
+            data[CONF_ENFORCED_WAN_TYPE] = wan_type
+            data[CONF_ENFORCED_AT] = started.isoformat()
+        self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+
+    @callback
+    def arm_auto_off(self, delay: timedelta) -> None:
+        """Switch the preferred uplink on again after ``delay``."""
+        self.cancel_auto_off()
+        self._unsub_auto_off = async_call_later(self.hass, delay, self._async_auto_off)
+
+    @callback
+    def arm_auto_off_after_restart(self) -> None:
+        """Arm the automatic switch-off again after a restart, or catch up on it."""
+        if self.backup_enforced and (started := self.enforced_at) is not None:
+            remaining = started + self.auto_off - dt_util.utcnow()
+            self.arm_auto_off(max(remaining, timedelta(0)))
+
+    @callback
+    def cancel_auto_off(self) -> None:
+        """Stop the timer; the console keeps its state."""
+        if self._unsub_auto_off is not None:
+            self._unsub_auto_off()
+            self._unsub_auto_off = None
+
+    async def _async_auto_off(self, _now: datetime) -> None:
+        """Switch back after the configured time."""
+        self._unsub_auto_off = None
+        if not self.backup_enforced:
+            return
+        try:
+            await self.async_release_backup()
+        except HomeAssistantError as err:
+            _LOGGER.warning("Could not switch the preferred uplink on again: %s", err)
+            self.arm_auto_off(timedelta(minutes=1))
+
+    # The button "Run speed test over backup uplink": switch the preferred
+    # uplink off, wait for the failover, run the test, wait for the result,
+    # switch the uplink on again, whatever happened in between.
+
+    async def async_start_backup_speedtest(self) -> None:
+        """Start the measurement of the backup uplink in the background, unless unwise."""
+        if self.admin_client is None:
+            raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_admin")
+        if self.backup_speedtest is not None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="backup_speedtest_running"
+            )
+        self._check_no_speedtest_running()
+        self._check_enforceable()
+        self.backup_speedtest = self.config_entry.async_create_background_task(
+            self.hass, self._async_backup_speedtest(), "network_plus backup speed test"
+        )
+        self.async_update_listeners()
+
+    async def _async_backup_speedtest(self) -> None:
+        try:
+            await self.async_enforce_backup()
+            try:
+                if not await self._async_wait(lambda s: s.backup_active is True, FAILOVER_TIMEOUT):
+                    raise HomeAssistantError("the gateway did not switch to the backup in time")
+                before = self.data.speedtest.last_run if self.data.speedtest else None
+                await self.async_start_speedtest()
+                if not await self._async_wait(
+                    lambda s: (
+                        s.speedtest is not None
+                        and not s.speedtest.running
+                        and s.speedtest.last_run != before
+                    ),
+                    RESULT_TIMEOUT,
+                ):
+                    raise HomeAssistantError("the gateway reported no result in time")
+            finally:
+                await self.async_release_backup()
+        except HomeAssistantError as err:
+            _LOGGER.warning("Speed test over the backup uplink: %s", err)
+        finally:
+            self.backup_speedtest = None
+            self.async_update_listeners()
+
+    async def _async_wait(self, predicate: Callable[[NetworkState], bool], seconds: float) -> bool:
+        """Return whether ``predicate`` holds for a state within ``seconds``."""
+        if predicate(self.data):
+            return True
+        done = self.hass.loop.create_future()
+
+        @callback
+        def _check() -> None:
+            if not done.done() and predicate(self.data):
+                done.set_result(True)
+
+        unsub = self.async_add_listener(_check)
+        try:
+            async with asyncio.timeout(seconds):
+                await done
+        except TimeoutError:
+            return False
+        finally:
+            unsub()
+        return True
 
     @asynccontextmanager
     async def _admin_write(self, failed_key: str) -> AsyncIterator[NetworkClient]:

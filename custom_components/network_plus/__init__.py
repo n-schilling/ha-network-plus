@@ -77,6 +77,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> b
     )
     if admin_client is not None:
         await _async_check_admin(coordinator, admin_client)
+        # An enforced backup from before the restart ends on time, or at once
+        coordinator.arm_auto_off_after_restart()
+        entry.async_on_unload(coordinator.cancel_auto_off)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_create_background_task(hass, coordinator.async_listen(), "network_plus websocket")
     return True
