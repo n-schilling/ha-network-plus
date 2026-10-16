@@ -35,7 +35,7 @@ Download, upload and ping of the gateway's last speed test, and when it ran (dia
 
 ### Public addresses
 
-Per uplink a sensor with the public IPv4 and one with the IPv6 address of its port (diagnostic, disabled by default: an address in the recorder is your choice). The event `public_ip_changed` fires when an address changes, with `family`, `address` and `previous`, so DynDNS or similar can follow. An address that appears or vanishes, for example while an uplink is down, is no change.
+Per uplink a sensor with the IPv4 and one with the IPv6 address of its port (diagnostic, disabled by default: an address in the recorder is your choice). Behind another router this is a private address. The event `public_ip_changed` fires when an address changes, with `family`, `address` and `previous`, so DynDNS or similar can follow. An address that appears or vanishes, for example while an uplink is down, is no change.
 
 ### LTE backup
 

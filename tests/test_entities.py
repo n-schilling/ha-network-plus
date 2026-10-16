@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
 
-from freezegun.api import FrozenDateTimeFactory
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -48,6 +46,12 @@ def _state(hass: HomeAssistant, entity_id: str) -> str:
     state = hass.states.get(entity_id)
     assert state is not None, entity_id
     return state.state
+
+
+async def _poll(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Run the coordinator's poll, as the 60-second timer would."""
+    await entry.runtime_data.coordinator.async_refresh()
+    await hass.async_block_till_done()
 
 
 async def test_entities_after_setup(hass: HomeAssistant, setup_entry: MockConfigEntry) -> None:
@@ -142,13 +146,10 @@ async def test_brief_failover_seen_by_polling(
     hass: HomeAssistant,
     setup_entry: MockConfigEntry,
     console: FakeConsole,
-    freezer: FrozenDateTimeFactory,
 ) -> None:
     """A failover that ended between two polls fires a brief failover."""
     console.set_gateway(gateway(transition=TRANSITION + 5000))
-    freezer.tick(timedelta(seconds=61))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await _poll(hass, setup_entry)
     assert hass.states.get(EVENT).attributes["event_type"] == "brief_failover"  # type: ignore[union-attr]
 
 
@@ -156,7 +157,6 @@ async def test_poll_failure_and_recovery(
     hass: HomeAssistant,
     setup_entry: MockConfigEntry,
     console: FakeConsole,
-    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Without answer the entities are unavailable, not offline; the next good poll brings them back.
 
@@ -164,9 +164,7 @@ async def test_poll_failure_and_recovery(
     console is healthy, so a failing poll is not hidden behind push data.
     """
     console.error = NetworkError("down")
-    freezer.tick(timedelta(seconds=61))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await _poll(hass, setup_entry)
     assert hass.states.get(WAN).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
     assert hass.states.get(BACKUP).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
 
@@ -174,9 +172,7 @@ async def test_poll_failure_and_recovery(
     assert hass.states.get(WAN).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
 
     console.error = None
-    freezer.tick(timedelta(seconds=61))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await _poll(hass, setup_entry)
     assert hass.states.get(WAN).state == "on"  # type: ignore[union-attr]
 
 
@@ -184,13 +180,10 @@ async def test_gateway_missing(
     hass: HomeAssistant,
     setup_entry: MockConfigEntry,
     console: FakeConsole,
-    freezer: FrozenDateTimeFactory,
 ) -> None:
     """A console that no longer reports the gateway makes the entities unavailable."""
     console.devices = []
-    freezer.tick(timedelta(seconds=61))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await _poll(hass, setup_entry)
     assert hass.states.get(ACTIVE).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
 
 
@@ -198,13 +191,10 @@ async def test_auth_failure_starts_reauth(
     hass: HomeAssistant,
     setup_entry: MockConfigEntry,
     console: FakeConsole,
-    freezer: FrozenDateTimeFactory,
 ) -> None:
     """A rejected login asks for the password."""
     console.error = NetworkAuthError("no")
-    freezer.tick(timedelta(seconds=61))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await _poll(hass, setup_entry)
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert [f["context"]["source"] for f in flows] == ["reauth"]
 
@@ -368,16 +358,13 @@ async def test_push_with_numbers_only_waits_for_poll(
     hass: HomeAssistant,
     setup_entry: MockConfigEntry,
     console: FakeConsole,
-    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Changed latency or usage over the websocket shows with the next poll, not at once."""
     await console.push(hass, sync(gateway(latency=99, download=10.0)))
     assert _state(hass, LATENCY) == "14"
     assert _state(hass, "sensor.gateway_speed_test_download") == "949.0"
     console.set_gateway(gateway(latency=99, download=10.0))
-    freezer.tick(timedelta(seconds=61))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await _poll(hass, setup_entry)
     assert _state(hass, LATENCY) == "99"
     assert _state(hass, "sensor.gateway_speed_test_download") == "10.0"
 
@@ -386,15 +373,12 @@ async def test_speedtest_missing(
     hass: HomeAssistant,
     setup_entry: MockConfigEntry,
     console: FakeConsole,
-    freezer: FrozenDateTimeFactory,
 ) -> None:
     """A gateway without speed test results gives unknown sensors."""
     raw = gateway()
     raw["uplink"] = {"comment": "WAN", "latency": 15}
     console.set_gateway(raw)
-    freezer.tick(timedelta(seconds=61))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await _poll(hass, setup_entry)
     assert _state(hass, "sensor.gateway_speed_test_download") == STATE_UNKNOWN
     assert _state(hass, "sensor.gateway_last_speed_test") == STATE_UNKNOWN
     assert hass.states.get("sensor.gateway_last_speed_test").attributes["status"] is None  # type: ignore[union-attr]
@@ -445,19 +429,120 @@ async def test_clients_not_readable(
     hass: HomeAssistant,
     setup_entry: MockConfigEntry,
     console: FakeConsole,
-    freezer: FrozenDateTimeFactory,
 ) -> None:
     """Without the clients endpoint the VPN sensor is unknown; the uplinks stay available."""
     console.clients_error = NetworkError("no such endpoint")
-    freezer.tick(timedelta(seconds=61))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await _poll(hass, setup_entry)
     assert _state(hass, VPN) == STATE_UNKNOWN
     assert hass.states.get(VPN).attributes["clients"] == []  # type: ignore[union-attr]
     assert _state(hass, WAN) == "on"
     console.clients_error = NetworkAuthError("no")
-    freezer.tick(timedelta(seconds=61))
-    async_fire_time_changed(hass)
-    await hass.async_block_till_done()
+    await _poll(hass, setup_entry)
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert [f["context"]["source"] for f in flows] == ["reauth"]
+
+
+async def test_partial_update_is_merged(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A device:update carries only changed fields; the rest of the object is kept."""
+    await console.push(
+        hass,
+        {
+            "meta": {"message": "device:update"},
+            "data": [
+                {"firewall_hits_state": 1},  # no MAC: ignored
+                {"mac": MAC, "last_wan_status": {"WAN": "offline", "WAN_LTE_FAILOVER": "online"}},
+                {"mac": LTE_MAC, "lte_connected": "no"},
+            ],
+        },
+    )
+    assert _state(hass, WAN) == "off"
+    assert _state(hass, LATENCY) == "14"  # the merged object still has its monitors
+    assert hass.states.get(EVENT).attributes["event_type"] == "uplink_down"  # type: ignore[union-attr]
+    assert setup_entry.runtime_data.coordinator.data.lte[LTE_MAC].connected is False  # type: ignore[index]
+
+
+async def test_poll_overlapped_by_push_keeps_the_push(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+) -> None:
+    """A poll answer from before a pushed failover must not turn the failover back."""
+    console.devices_gate = asyncio.Event()
+    poll = hass.async_create_task(setup_entry.runtime_data.coordinator.async_refresh())
+    for _ in range(5):
+        await asyncio.sleep(0)  # the poll now waits for its device answer
+    # Not console.push: that would wait for every task, the held poll included
+    console.messages.put_nowait(sync(gateway(wan="offline", active="WAN_LTE_FAILOVER")))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert _state(hass, ACTIVE) == "wan_lte_failover"
+    console.devices_gate.set()  # the answer is the snapshot from before the failover
+    await poll
+    await hass.async_block_till_done()
+    assert _state(hass, ACTIVE) == "wan_lte_failover"
+    assert hass.states.get(EVENT).attributes["event_type"] == "failover"  # type: ignore[union-attr]
+    assert _state(hass, LTE_PERCENT) == "0.01875"  # the LTE device stays known
+
+
+async def test_uplink_renamed_reloads_entry(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+) -> None:
+    """Entity names carry the uplink names; a rename in UniFi Network renews them."""
+    assert hass.states.get(WAN).attributes["friendly_name"] == "Gateway Cable"  # type: ignore[union-attr]
+    console.configs[0]["name"] = "Fibre"
+    await _poll(hass, setup_entry)
+    assert setup_entry.state is ConfigEntryState.LOADED
+    assert hass.states.get(WAN).attributes["friendly_name"] == "Gateway Fibre"  # type: ignore[union-attr]
+
+
+async def test_two_lte_devices(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """Every LTE device gets its own device and entities, each with its own values."""
+    second = lte_device(mac="02:a1:b2:c3:d4:e7", name="LTE second", rx=3_000_000)
+    await console.push(hass, sync(second))
+    assert _state(hass, LTE_PERCENT) == "0.01875"
+    assert _state(hass, "sensor.lte_second_lte_data_used") == "0.04375"
+    devices = dr.async_get(hass)
+    assert devices.async_get_device_by_identifier(
+        (DOMAIN, "02:a1:b2:c3:d4:e7"), setup_entry.entry_id
+    )
+
+
+async def test_poll_requests_run_together(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+) -> None:
+    """Devices, uplink configuration and clients are fetched in parallel; a clients error stays soft."""
+    console.clients_error = NetworkError("no such endpoint")
+    console.devices_gate = asyncio.Event()
+    poll = hass.async_create_task(setup_entry.runtime_data.coordinator.async_refresh())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    console.devices_gate.set()
+    await poll
+    await hass.async_block_till_done()
+    assert _state(hass, WAN) == "on"
+    assert _state(hass, VPN) == STATE_UNKNOWN
+
+
+async def test_unexpected_poll_errors(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """An error that is no network error is not swallowed, for devices or clients."""
+    coordinator = setup_entry.runtime_data.coordinator
+    console.clients_error = RuntimeError("boom")
+    await _poll(hass, setup_entry)
+    assert coordinator.last_update_success is False
+    console.clients_error = None
+    console.error = RuntimeError("boom")
+    await _poll(hass, setup_entry)
+    assert coordinator.last_update_success is False
+    console.error = None
+    await _poll(hass, setup_entry)
+    assert coordinator.last_update_success is True

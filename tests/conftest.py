@@ -87,6 +87,8 @@ def gateway(
 
 def lte_device(
     *,
+    mac: str = LTE_MAC,
+    name: str = "LTE backup",
     rx: int = 1_000_000,
     tx: int = 500_000,
     connected: Any = "yes",
@@ -98,10 +100,10 @@ def lte_device(
 ) -> dict[str, Any]:
     """Return the LTE device's runtime object, secrets included as the console sends them."""
     return {
-        "mac": LTE_MAC,
+        "mac": mac,
         "type": "uap",
         "model": "ULTEPRO",
-        "name": "LTE backup",
+        "name": name,
         "version": "6.0.0",
         "lte_state": "ready",
         "lte_connected": connected,
@@ -148,6 +150,8 @@ class FakeConsole:
         self.clients_error: Exception | None = None
         self.close_with_error = False
         self.detached = 0
+        # Set to hold a poll's device request until the test releases it
+        self.devices_gate: asyncio.Event | None = None
         self.listen_error: Exception | None = None
         self.messages: asyncio.Queue[Any] = asyncio.Queue()
         self.listening = asyncio.Event()
@@ -159,6 +163,8 @@ class FakeConsole:
         self.devices[0] = raw
 
     async def get_devices(self) -> list[dict[str, Any]]:
+        if self.devices_gate is not None:
+            await self.devices_gate.wait()
         if self.error:
             raise self.error
         return copy.deepcopy(self.devices)

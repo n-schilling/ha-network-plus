@@ -39,7 +39,6 @@ async def async_get_config_entry_diagnostics(
     speedtest = asdict(data.speedtest) if data.speedtest else None
     if speedtest:
         speedtest["last_run"] = speedtest["last_run"] is not None
-    lte = asdict(data.lte) if data.lte else None
     return {
         "entry": async_redact_data(dict(entry.data), {CONF_HOST, CONF_PASSWORD, CONF_USERNAME}),
         "websocket_connected": coordinator.websocket_connected,
@@ -58,12 +57,13 @@ async def async_get_config_entry_diagnostics(
         "latency": data.latency,
         "has_last_transition": data.last_transition is not None,
         "speedtest": speedtest,
-        "lte": {
-            "model": data.lte.model,
-            "version": data.lte.version,
-            **{field: lte[field] for field in LTE_FIELDS},
-        }
-        if data.lte and lte
-        else None,
+        "lte": [
+            {
+                "model": lte.model,
+                "version": lte.version,
+                **{field: getattr(lte, field) for field in LTE_FIELDS},
+            }
+            for lte in (data.lte or {}).values()
+        ],
         "vpn_clients": len(data.vpn_clients) if data.vpn_clients is not None else None,
     }

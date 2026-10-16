@@ -38,18 +38,20 @@ async def test_diagnostics_hold_nothing_personal(
         "last_run": True,
         "status": "Success",
     }
-    assert result["lte"] == {
-        "model": "ULTEPRO",
-        "version": "6.0.0",
-        "connected": True,
-        "in_use": False,
-        "usage_bytes": 1_500_000,
-        "soft_limit": 6_000_000_000,
-        "hard_limit": 8_000_000_000,
-        "limit_enabled": True,
-        "rssi": -77,
-        "rsrp": -112,
-    }
+    assert result["lte"] == [
+        {
+            "model": "ULTEPRO",
+            "version": "6.0.0",
+            "connected": True,
+            "in_use": False,
+            "usage_bytes": 1_500_000,
+            "soft_limit": 6_000_000_000,
+            "hard_limit": 8_000_000_000,
+            "limit_enabled": True,
+            "rssi": -77,
+            "rsrp": -112,
+        }
+    ]
     assert result["vpn_clients"] == 1
 
 
@@ -63,5 +65,5 @@ async def test_diagnostics_without_lte_and_clients(
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     result = await async_get_config_entry_diagnostics(hass, config_entry)
-    assert result["lte"] is None
+    assert result["lte"] == []
     assert result["vpn_clients"] is None

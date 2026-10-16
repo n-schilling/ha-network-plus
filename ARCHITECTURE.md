@@ -55,6 +55,18 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   uplink, the transition timestamp, or the LTE connected/in-use flags. All
   numbers (latency, speed test, data usage, remote clients) come from the
   60-second poll. This keeps failovers immediate and the recorder quiet.
+- `device:sync` carries whole objects and replaces what is known;
+  `device:update` carries only the changed fields (seen live: a single key)
+  and is merged into the known object.
+- The poll's three requests run in parallel. A push that arrives while the
+  poll is in flight is newer than the poll's snapshot, so the poll then keeps
+  the pushed objects and takes only configuration and clients; otherwise a
+  snapshot from before a failover would turn it back and fire a false
+  `restored`.
+- Uplink names are part of entity names (translation placeholders). When a
+  poll finds an uplink renamed in UniFi Network, the entry is reloaded.
+- Concurrent requests that find the session rejected share one new login
+  (login generation counter).
 - A failed poll makes the entities unavailable (`UpdateFailed`); the next
   poll that succeeds brings them back. Pushes are ignored while the last poll
   failed: the poll decides whether the console is healthy, so a failing poll
@@ -66,10 +78,11 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 ## Entities and devices
 
 - The gateway's device is created in `async_setup_entry` so its registry ID is
-  known; the LTE device hangs below it through `via_device_id` (`via_device`
-  is deprecated since Home Assistant 2026.10). Both carry their MAC as
-  connection, like the devices of the built-in UniFi integration; since
-  2026.10 a device belongs to one integration, so they are separate devices.
+  known; every LTE device (keyed by MAC) hangs below it through
+  `via_device_id` (`via_device` is deprecated since Home Assistant 2026.10).
+  All carry their MAC as connection, like the devices of the built-in UniFi
+  integration; since 2026.10 a device belongs to one integration, so they are
+  separate devices.
 - Uplink entities exist for every uplink the gateway monitors
   (`last_wan_status`), not for every configured WAN port. Uplinks and the LTE
   device that appear later get their entities without a reload
@@ -101,9 +114,18 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   the log is polled, states arrive by push. Event types the log knows and the
   state does not (packet loss, "failed multiple times") are therefore not
   offered yet.
-- **Public addresses** live in disabled diagnostic sensors and in the
-  `public_ip_changed` event, so storing an address in the recorder is the
-  user's choice. An address that appears or vanishes is no change event.
+- **Addresses** are the uplink port's addresses: what the provider assigned,
+  or a private address behind another router (double NAT); only link-local,
+  unspecified, loopback and multicast are left out. They live in disabled
+  diagnostic sensors and in the `public_ip_changed` event, so storing an
+  address in the recorder is the user's choice. An address that appears or
+  vanishes is no change event.
+- **Brief failover tolerance:** a transition timestamp within 30 s of a seen
+  switch belongs to that switch. This compares the console's clock with Home
+  Assistant's; both are expected to run on NTP.
+- **Active uplink fallback:** without `uplink.comment` the first uplink in
+  failover order that is online counts, but an uplink of unknown status before
+  it leaves the active uplink unknown rather than reporting a false failover.
 - **LTE usage** is the console's monthly counter, reported with state class
   `total_increasing`: the statistics take the console's monthly drop as the
   reset, whatever its time zone or billing day. The share of the data plan is

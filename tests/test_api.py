@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 import json
@@ -16,7 +17,7 @@ from custom_components.network_plus.api import (
     NetworkClient,
     NetworkError,
     find_gateway,
-    find_lte,
+    find_lte_devices,
     is_lte_device,
 )
 
@@ -68,6 +69,7 @@ class FakeSession:
     @staticmethod
     @asynccontextmanager
     async def _answer(item: FakeResponse | Exception) -> AsyncIterator[FakeResponse]:
+        await asyncio.sleep(0)  # a real request yields to the loop
         if isinstance(item, Exception):
             raise item
         yield item
@@ -246,13 +248,23 @@ async def test_get_active_clients() -> None:
         await client.get_active_clients()
 
 
-def test_find_lte() -> None:
-    """The LTE device is the one with LTE fields."""
-    devices = [{"type": "usw"}, gateway(), lte_device()]
-    assert find_lte(devices) is devices[2]
-    assert find_lte(devices[:2]) is None
+def test_find_lte_devices() -> None:
+    """The LTE devices are the ones with LTE fields."""
+    devices = [{"type": "usw"}, gateway(), lte_device(), lte_device(mac="02:a1:b2:c3:d4:e7")]
+    assert find_lte_devices(devices) == devices[2:]
+    assert find_lte_devices(devices[:2]) == []
     assert is_lte_device({"lte_connected": True})
     assert not is_lte_device(gateway())
+
+
+async def test_concurrent_callers_log_in_once() -> None:
+    """Two requests that find the session rejected share one new login."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    session.gets[DEVICES] = [FakeResponse(200, {"data": []}), FakeResponse(200, {"data": []})]
+    client = _client(session)
+    assert await asyncio.gather(client.get_devices(), client.get_devices()) == [[], []]
+    assert [r[0] for r in session.requests] == ["POST", "GET", "GET"]
 
 
 def test_detach() -> None:

@@ -58,14 +58,22 @@ class NetworkClient:
         self._site = site
         self._logged_in = False
         self._login_lock = asyncio.Lock()
+        # Counts successful logins, so concurrent callers log in only once
+        self._login_generation = 0
 
     @property
     def _base(self) -> str:
         return f"https://{self._host}"
 
-    async def login(self) -> None:
-        """Log in; the console keeps the session in a cookie."""
+    async def login(self, seen_generation: int | None = None) -> None:
+        """Log in; the console keeps the session in a cookie.
+
+        A caller that found the session rejected passes the login generation
+        it saw; if another caller logged in meanwhile, nothing is done.
+        """
         async with self._login_lock:
+            if seen_generation is not None and seen_generation != self._login_generation:
+                return
             try:
                 async with self._session.post(
                     f"{self._base}/api/auth/login",
@@ -78,12 +86,13 @@ class NetworkClient:
             except (ClientError, TimeoutError) as err:
                 raise NetworkError(_describe(err)) from err
             self._logged_in = True
+            self._login_generation += 1
 
     async def _get(self, path: str) -> Any:
         """GET a JSON document; log in first and once more when the session expired."""
         for attempt in range(2):
             if not self._logged_in:
-                await self.login()
+                await self.login(self._login_generation)
             try:
                 async with self._session.get(f"{self._base}{path}", timeout=TIMEOUT) as resp:
                     if resp.status == 401:
@@ -147,7 +156,7 @@ class NetworkClient:
         connection could be made.
         """
         if not self._logged_in:
-            await self.login()
+            await self.login(self._login_generation)
         url = f"wss://{self._host}/proxy/network/wss/s/{self._site}/events?clients=v2"
         try:
             async with self._session.ws_connect(url, heartbeat=HEARTBEAT) as ws:
@@ -185,9 +194,9 @@ def is_lte_device(device: dict[str, Any]) -> bool:
     return "lte_state" in device or "lte_connected" in device
 
 
-def find_lte(devices: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return the LTE backup device among the devices, if there is one."""
-    return next((d for d in devices if is_lte_device(d)), None)
+def find_lte_devices(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return the LTE backup devices among the devices."""
+    return [d for d in devices if is_lte_device(d)]
 
 
 def _raise_for_status(resp: ClientResponse) -> None:

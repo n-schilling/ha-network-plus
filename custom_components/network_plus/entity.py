@@ -66,14 +66,15 @@ class UplinkEntity(NetworkPlusEntity):
 
 
 class LteEntity(CoordinatorEntity[NetworkCoordinator]):
-    """An entity of the LTE backup device, which hangs below the gateway."""
+    """An entity of one LTE backup device, which hangs below the gateway."""
 
     _attr_has_entity_name = True
 
     def __init__(self, entry: NetworkConfigEntry, lte: LteBackup, key: str) -> None:
-        """Initialize the entity."""
+        """Initialize the entity of the LTE device with ``lte.mac``."""
         coordinator = entry.runtime_data.coordinator
         super().__init__(coordinator)
+        self.lte_mac = lte.mac
         self._attr_unique_id = f"{lte.mac}_{key}"
         self._attr_device_info = DeviceInfo(
             connections={(CONNECTION_NETWORK_MAC, format_mac(lte.mac))},
@@ -88,7 +89,7 @@ class LteEntity(CoordinatorEntity[NetworkCoordinator]):
     @property
     def lte(self) -> LteBackup | None:
         """Return the LTE device's current state."""
-        return self.coordinator.data.lte
+        return (self.coordinator.data.lte or {}).get(self.lte_mac)
 
     @property
     def available(self) -> bool:
@@ -124,18 +125,17 @@ def add_lte_entities(
     add_entities: Callable[[Iterable[Entity]], None],
     create: Callable[[LteBackup], Iterable[Entity]],
 ) -> None:
-    """Add the entities of the LTE backup device once the console reports one."""
+    """Add the entities of every LTE backup device, also of devices that appear later."""
     coordinator = entry.runtime_data.coordinator
-    added = False
+    known: set[str] = set()
 
     @callback
     def _add_new() -> None:
-        nonlocal added
-        lte = coordinator.data.lte
-        if added or lte is None:
+        new = [lte for mac, lte in (coordinator.data.lte or {}).items() if mac not in known]
+        if not new:
             return
-        added = True
-        add_entities(create(lte))
+        known.update(lte.mac for lte in new)
+        add_entities([entity for lte in new for entity in create(lte)])
 
     _add_new()
     entry.async_on_unload(coordinator.async_add_listener(_add_new))

@@ -10,7 +10,7 @@ LTE device, and they never leave this module.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import ipaddress
 import logging
 import re
@@ -30,6 +30,11 @@ LOCAL_CLIENT_TYPES = frozenset({"WIRED", "WIRELESS"})
 
 # Network group of an uplink -> port object of the gateway (WAN -> wan1)
 _WAN_GROUP = re.compile(r"^WAN(\d*)$")
+
+# A transition timestamp this close to a seen switch of the active uplink
+# belongs to that switch: the console's clock and Home Assistant's may differ
+# by a few seconds, and the timestamp may arrive a push later.
+SWITCH_TOLERANCE = timedelta(seconds=30)
 
 # Event types of the "Internet" event entity
 EVENT_FAILOVER = "failover"
@@ -127,7 +132,7 @@ class NetworkState:
     last_transition: datetime | None  # last failover to or from the LTE backup
     latency: int | None = None  # ms, on the active uplink
     speedtest: Speedtest | None = None
-    lte: LteBackup | None = None
+    lte: dict[str, LteBackup] | None = None  # by MAC; None: not looked for yet
     vpn_clients: tuple[VpnClient, ...] | None = None  # None: the console did not tell
 
     @property
@@ -162,14 +167,14 @@ def essentials(state: NetworkState) -> tuple[Any, ...]:
         tuple((u.key, u.online, u.ipv4, u.ipv6) for u in state.uplinks.values()),
         state.active,
         state.last_transition,
-        (state.lte.connected, state.lte.in_use) if state.lte else None,
+        tuple((mac, lte.connected, lte.in_use) for mac, lte in (state.lte or {}).items()),
     )
 
 
 def parse_state(
     raw: dict[str, Any],
     configs: list[dict[str, Any]],
-    lte_raw: dict[str, Any] | None = None,
+    lte_raws: list[dict[str, Any]] | None = None,
     clients: list[Any] | None = None,
 ) -> NetworkState:
     """Build the state from the runtime objects, the uplink configuration and the clients."""
@@ -222,7 +227,7 @@ def parse_state(
         last_transition=_timestamp_ms(raw.get("last_lte_failover_transition_timestamp")),
         latency=latency,
         speedtest=_speedtest(uplink),
-        lte=parse_lte(lte_raw) if lte_raw is not None else None,
+        lte={lte.mac: lte for lte in map(parse_lte, lte_raws)} if lte_raws is not None else None,
         vpn_clients=parse_clients(clients) if clients is not None else None,
     )
 
@@ -318,7 +323,7 @@ def detect_events(
         and new.last_transition is not None
         and new.last_transition > old.last_transition
         and old.active == new.active == new.primary
-        and (switch_seen_at is None or new.last_transition > switch_seen_at)
+        and (switch_seen_at is None or new.last_transition > switch_seen_at + SWITCH_TOLERANCE)
     ):
         # The gateway switched to the backup and back between two states
         # this integration saw, for example while it was not connected.
@@ -362,12 +367,18 @@ def _active(raw: dict[str, Any], uplinks: dict[str, Uplink]) -> str | None:
     """Return the uplink that carries the traffic.
 
     The gateway names it in ``uplink.comment``. If that is missing or unknown,
-    the traffic runs over the first uplink in failover order that is online.
+    the traffic runs over the first uplink in failover order that is online;
+    an uplink with unknown status before it leaves the answer unknown.
     """
     comment = _dict(raw.get("uplink")).get("comment")
     if isinstance(comment, str) and comment in uplinks:
         return comment
-    return next((u.key for u in uplinks.values() if u.online), None)
+    for uplink in uplinks.values():
+        if uplink.online is None:
+            return None
+        if uplink.online:
+            return uplink.key
+    return None
 
 
 def _availability(stats: dict[str, Any]) -> float | None:
@@ -432,11 +443,18 @@ def _yes_no(value: Any) -> bool | None:
 
 
 def _ipv4(value: Any) -> str | None:
+    """Return the port's IPv4 address.
+
+    Private addresses count: behind another router the uplink's address is
+    private, and a change of it is still a change of the uplink.
+    """
     try:
         address = ipaddress.ip_address(str(value))
     except ValueError:
         return None
-    return str(address) if address.version == 4 else None
+    if address.version != 4 or _is_no_address(address):
+        return None
+    return str(address)
 
 
 def _public_ipv6(values: Any) -> str | None:
@@ -446,14 +464,13 @@ def _public_ipv6(values: Any) -> str | None:
             address = ipaddress.ip_address(str(value))
         except ValueError:
             continue
-        if address.version == 6 and not (
-            address.is_link_local
-            or address.is_loopback
-            or address.is_multicast
-            or address.is_unspecified
-        ):
+        if address.version == 6 and not (address.is_link_local or _is_no_address(address)):
             return str(address)
     return None
+
+
+def _is_no_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return address.is_unspecified or address.is_loopback or address.is_multicast
 
 
 def _name(state: NetworkState, key: str) -> str:

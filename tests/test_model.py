@@ -83,6 +83,10 @@ def test_active_falls_back_to_first_online() -> None:
     """Without a known uplink name the first online uplink carries the traffic."""
     state = parse_state(gateway(wan="offline", active="eth9"), wan_configs())
     assert state.active == "WAN_LTE_FAILOVER"
+    # An uplink with unknown status before the first online one leaves it unknown
+    state = parse_state(gateway(wan="degraded", active="eth9"), wan_configs())
+    assert state.active is None
+    assert state.backup_active is None
     raw = gateway(wan="offline", lte="offline")
     del raw["uplink"]
     state = parse_state(raw, wan_configs())
@@ -226,6 +230,12 @@ def test_addresses() -> None:
     raw["wan2"] = {"ipv6": ["fe80::2", "::1", "ff02::1", "::", "junk", "2001:db8::9"]}
     state = parse_state(raw, wan_configs())
     assert (state.uplinks["WAN2"].ipv4, state.uplinks["WAN2"].ipv6) == (None, "2001:db8::9")
+    raw["last_wan_interfaces"]["WAN2"] = {"ip": "0.0.0.0"}  # unspecified is no address
+    assert parse_state(raw, wan_configs()).uplinks["WAN2"].ipv4 is None
+    raw["last_wan_interfaces"]["WAN2"] = {"ip": "192.168.178.2"}  # private counts: double NAT
+    raw["wan2"] = {"ipv6": ["fd00::2"]}  # a ULA counts as well
+    wan2 = parse_state(raw, wan_configs()).uplinks["WAN2"]
+    assert (wan2.ipv4, wan2.ipv6) == ("192.168.178.2", "fd00::2")
     raw["last_wan_interfaces"]["WAN"] = {"ip": "2001:db8::1"}  # an IPv6 is no IPv4
     raw["wan1"] = {"ipv6": "2001:db8::7"}  # a string is no list
     state = parse_state(raw, wan_configs())
@@ -312,8 +322,9 @@ def test_parse_clients() -> None:
 
 def test_state_with_lte_and_clients() -> None:
     """LTE device and clients become part of the state."""
-    state = parse_state(gateway(), wan_configs(), lte_device(), [teleport_client()])
-    assert state.lte is not None and state.lte.usage_bytes == 1_500_000
+    state = parse_state(gateway(), wan_configs(), [lte_device()], [teleport_client()])
+    assert state.lte is not None and state.lte[LTE_MAC].usage_bytes == 1_500_000
+    assert parse_state(gateway(), wan_configs(), []).lte == {}
     assert state.vpn_clients == (
         VpnClient("Phone", "TELEPORT", datetime.fromtimestamp(1_700_000_000, UTC)),
     )
@@ -321,17 +332,18 @@ def test_state_with_lte_and_clients() -> None:
 
 def test_essentials() -> None:
     """A push counts for uplinks, addresses, the active uplink and the LTE state, not for numbers."""
-    base = parse_state(gateway(), wan_configs(), lte_device())
-    same = parse_state(gateway(latency=99, download=1.0), wan_configs(), lte_device(rx=5))
+    base = parse_state(gateway(), wan_configs(), [lte_device()])
+    same = parse_state(gateway(latency=99, download=1.0), wan_configs(), [lte_device(rx=5)])
     assert essentials(base) == essentials(same)
     for other in (
-        parse_state(gateway(wan="offline"), wan_configs(), lte_device()),
-        parse_state(gateway(ipv4="198.51.100.8"), wan_configs(), lte_device()),
-        parse_state(gateway(ipv6="2001:db8::8"), wan_configs(), lte_device()),
-        parse_state(gateway(active="WAN_LTE_FAILOVER"), wan_configs(), lte_device()),
-        parse_state(gateway(transition=TRANSITION + 1), wan_configs(), lte_device()),
-        parse_state(gateway(), wan_configs(), lte_device(connected="no")),
-        parse_state(gateway(), wan_configs(), lte_device(in_use=True)),
+        parse_state(gateway(wan="offline"), wan_configs(), [lte_device()]),
+        parse_state(gateway(ipv4="198.51.100.8"), wan_configs(), [lte_device()]),
+        parse_state(gateway(ipv6="2001:db8::8"), wan_configs(), [lte_device()]),
+        parse_state(gateway(active="WAN_LTE_FAILOVER"), wan_configs(), [lte_device()]),
+        parse_state(gateway(transition=TRANSITION + 1), wan_configs(), [lte_device()]),
+        parse_state(gateway(), wan_configs(), [lte_device(connected="no")]),
+        parse_state(gateway(), wan_configs(), [lte_device(in_use=True)]),
+        parse_state(gateway(), wan_configs(), [lte_device(), lte_device(mac="02:a1:b2:c3:d4:e7")]),
         parse_state(gateway(), wan_configs()),
     ):
         assert essentials(base) != essentials(other)
@@ -370,6 +382,8 @@ def test_brief_failover_not_for_a_seen_switch() -> None:
     before = parse_state(gateway(), wan_configs())
     after = parse_state(gateway(transition=TRANSITION + 5000), wan_configs())
     assert after.last_transition is not None
+    # Within the tolerance for clock differences and a lagging timestamp: no event
     assert detect_events(before, after, after.last_transition + timedelta(seconds=1)) == []
-    events = detect_events(before, after, after.last_transition - timedelta(seconds=1))
+    assert detect_events(before, after, after.last_transition - timedelta(seconds=29)) == []
+    events = detect_events(before, after, after.last_transition - timedelta(seconds=31))
     assert [e.type for e in events] == [EVENT_BRIEF_FAILOVER]
