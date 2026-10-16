@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import patch
 
 from freezegun.api import FrozenDateTimeFactory
+import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
@@ -17,7 +18,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.network_plus.api import NetworkAuthError, NetworkError
-from custom_components.network_plus.const import DOMAIN
+from custom_components.network_plus.const import CONF_SPEEDTEST_UPLINK, DOMAIN
 
 from .conftest import (
     CLOSE,
@@ -418,6 +419,15 @@ async def test_speedtest_missing(
     assert last.attributes["running"] is None  # type: ignore[union-attr]
     assert last.attributes["uplink"] is None  # type: ignore[union-attr]
     assert hass.states.get("sensor.gateway_speed_test_download").attributes["uplink_name"] is None  # type: ignore[union-attr]
+    # Results without a run time have no uplink either
+    raw = gateway(interface=None)
+    del raw["speedtest-status"]
+    raw["uplink"]["speedtest_lastrun"] = 0
+    console.set_gateway(raw)
+    await _poll(hass, setup_entry)
+    assert _state(hass, "sensor.gateway_speed_test_download") == "949.0"
+    assert _state(hass, "sensor.gateway_last_speed_test") == STATE_UNKNOWN
+    assert hass.states.get("sensor.gateway_speed_test_download").attributes["uplink"] is None  # type: ignore[union-attr]
 
 
 async def test_speedtest_over_the_backup_shows_at_once(
@@ -427,8 +437,13 @@ async def test_speedtest_over_the_backup_shows_at_once(
     await console.push(hass, sync(gateway(speedtest_summary=1)))
     last = hass.states.get("sensor.gateway_last_speed_test")
     assert last.attributes["running"] is True  # type: ignore[union-attr]
-    finished = gateway(interface="gre1", download=40.0)
-    finished["uplink"]["speedtest_lastrun"] = SPEEDTEST_RUN + 60
+    # The last result stays, with the uplink it was seen with
+    assert last.attributes["uplink"] == "wan"  # type: ignore[union-attr]
+    assert _state(hass, "sensor.gateway_speed_test_download") == "949.0"
+    # Finished: the status block is ahead of the uplink object, and names the interface
+    finished = gateway(interface="gre1", download=40.0, speedtest_run=SPEEDTEST_RUN + 60)
+    finished["uplink"]["speedtest_lastrun"] = SPEEDTEST_RUN
+    finished["uplink"]["xput_down"] = 949.0
     await console.push(hass, sync(finished))
     download = hass.states.get("sensor.gateway_speed_test_download")
     assert download.state == "40.0"  # type: ignore[union-attr]
@@ -437,6 +452,80 @@ async def test_speedtest_over_the_backup_shows_at_once(
     last = hass.states.get("sensor.gateway_last_speed_test")
     assert last.state == "2023-11-14T22:14:20+00:00"  # type: ignore[union-attr]
     assert last.attributes["running"] is False  # type: ignore[union-attr]
+    assert setup_entry.data[CONF_SPEEDTEST_UPLINK] == {
+        "last_run": "2023-11-14T22:14:20+00:00",
+        "uplink": "WAN_LTE_FAILOVER",
+    }
+    # A little later the gateway no longer names the interface; the result keeps its uplink
+    console.set_gateway(gateway(interface=None, download=40.0, speedtest_run=SPEEDTEST_RUN + 60))
+    await _poll(hass, setup_entry)
+    download = hass.states.get("sensor.gateway_speed_test_download")
+    assert download.attributes["uplink"] == "wan_lte_failover"  # type: ignore[union-attr]
+
+
+async def test_speedtest_uplink_is_the_active_one_when_not_named(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A new result without an interface belongs to the uplink active when it was first seen."""
+    over_backup = gateway(
+        interface=None,
+        speedtest_run=SPEEDTEST_RUN + 60,
+        wan="offline",
+        active="WAN_LTE_FAILOVER",
+        transition=TRANSITION + 1000,
+    )
+    await console.push(hass, sync(over_backup))
+    download = hass.states.get("sensor.gateway_speed_test_download")
+    assert download.attributes["uplink"] == "wan_lte_failover"  # type: ignore[union-attr]
+    # Back on the preferred uplink, the result keeps its uplink
+    back = gateway(interface=None, speedtest_run=SPEEDTEST_RUN + 60, transition=TRANSITION + 2000)
+    await console.push(hass, sync(back))
+    assert _state(hass, ACTIVE) == "wan"
+    download = hass.states.get("sensor.gateway_speed_test_download")
+    assert download.attributes["uplink"] == "wan_lte_failover"  # type: ignore[union-attr]
+    # An interface the gateway names later wins
+    console.set_gateway(gateway(interface="eth8", speedtest_run=SPEEDTEST_RUN + 60))
+    await _poll(hass, setup_entry)
+    download = hass.states.get("sensor.gateway_speed_test_download")
+    assert download.attributes["uplink"] == "wan"  # type: ignore[union-attr]
+    # A result seen while no uplink is known stays without one
+    nowhere = gateway(interface=None, speedtest_run=SPEEDTEST_RUN + 120, wan="odd", lte="odd")
+    nowhere["uplink"]["comment"] = "nowhere"
+    await console.push(hass, sync(nowhere))
+    download = hass.states.get("sensor.gateway_speed_test_download")
+    assert download.attributes["uplink"] is None  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        (
+            {"last_run": "2023-11-14T22:13:20+00:00", "uplink": "WAN_LTE_FAILOVER"},
+            "wan_lte_failover",
+        ),
+        ({"last_run": "2023-11-14T22:00:00+00:00", "uplink": "WAN_LTE_FAILOVER"}, "wan"),
+        ({"uplink": "WAN_LTE_FAILOVER"}, "wan"),
+        ({"last_run": "2023-11-14T22:13:20+00:00", "uplink": 5}, "wan"),
+        ("x", "wan"),
+    ],
+)
+async def test_speedtest_uplink_survives_a_restart(
+    hass: HomeAssistant,
+    console: FakeConsole,
+    config_entry: MockConfigEntry,
+    stored: Any,
+    expected: str,
+) -> None:
+    """The uplink of the last result comes back from the entry; other run times or junk do not."""
+    console.set_gateway(gateway(interface=None))
+    config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        config_entry, data={**config_entry.data, CONF_SPEEDTEST_UPLINK: stored}
+    )
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    download = hass.states.get("sensor.gateway_speed_test_download")
+    assert download.attributes["uplink"] == expected  # type: ignore[union-attr]
 
 
 async def test_push_of_lte_state(

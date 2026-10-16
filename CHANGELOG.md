@@ -7,12 +7,12 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 ### Added
 
 - Button "Run speed test" (admin features only): starts the gateway's speed test, the same one UniFi Network runs on its schedule, over the uplink that carries the traffic. Refuses while a test is running. With the switch "Enforce backup uplink" this measures the backup; the README has the recipe and the data warning.
-- Attributes `uplink` and `uplink_name` on the four speed test sensors: the uplink the last test ran over, from the interface the gateway reports. Values measured over the backup no longer pass for the main line's.
+- Attributes `uplink` and `uplink_name` on the four speed test sensors: the uplink the last test ran over, from the interface the gateway names or the uplink active when the result was first seen, kept across restarts. Values measured over the backup no longer pass for the main line's.
 - Attribute `running` on "Last speed test".
 
 ### Changed
 
-- A speed test that starts or finishes is applied from the websocket at once; the result no longer waits for the next poll.
+- A speed test that starts or finishes is applied from the websocket at once, and the result is taken from the gateway's status block, which is ahead of its uplink object; it no longer waits for the next poll.
 
 ## [0.3.0] - 2026-10-16
 

@@ -35,7 +35,7 @@ Only uplinks the gateway monitors get entities; a configured but unused WAN port
 
 ### Speed test
 
-Download, upload and ping of the gateway's last speed test, and when it ran (diagnostic, with the result as attribute `status` and `running` while a test is in progress). All four sensors carry the attributes `uplink` and `uplink_name`: the uplink the test ran over, as the gateway reports it. A test that ran over the backup therefore does not pass for a measurement of the main line, and an automation or a template can keep the two apart.
+Download, upload and ping of the gateway's last speed test, and when it ran (diagnostic, with the result as attribute `status` and `running` while a test is in progress). All four sensors carry the attributes `uplink` and `uplink_name`: the uplink the test ran over. The gateway names the test's interface only for a while after the test, so the integration notes the uplink when it first sees a result (from the interface, or the uplink that carries the traffic at that moment) and keeps it, also across restarts. A test that ran over the backup therefore does not pass for a measurement of the main line, and an automation or a template can keep the two apart.
 
 The results are read; speed tests run in UniFi Network, by hand or on its schedule. With admin features, the button **"Run speed test"** starts one from Home Assistant (see below). A test that starts or finishes shows at once, not only with the next poll.
 
@@ -84,7 +84,7 @@ Mind the data: in a test, about 60 MB per minute ran over LTE while the backup w
 
 The event "Internet" fires `drill_completed` with the same numbers once the gateway is back, so an automation can log the drill or compare it with the last one. Times come from Home Assistant's clock, so drills compare with each other.
 
-The button **"Run speed test"** starts a speed test on the gateway, the same one UniFi Network runs on its schedule. It runs over the uplink that carries the traffic at that moment and takes about half a minute; the four speed test sensors show the result, with the uplink as attribute. The button refuses while a test is running. Together with the switch this measures the backup, see [A speed test over the backup uplink](#a-speed-test-over-the-backup-uplink).
+The button **"Run speed test"** starts a speed test on the gateway, the same one UniFi Network runs on its schedule. It runs over the uplink that carries the traffic at that moment and takes well under a minute; the four speed test sensors show the result as soon as the gateway reports it, with the uplink as attribute. The button refuses while a test is running. Together with the switch this measures the backup, see [A speed test over the backup uplink](#a-speed-test-over-the-backup-uplink).
 
 ## Using the data
 
@@ -243,7 +243,7 @@ mode: single
 
 The result carries `uplink: wan_lte_failover` (or whatever the backup's key is), so a template or a statistics helper can filter the backup's values out of the series, for example `{{ state_attr('sensor.gateway_speed_test_download', 'uplink') == 'wan' }}` as a condition before a value is taken as the main line's.
 
-**Mind the data.** A speed test moves data at full speed for about half a minute in each direction. Over a mobile backup that is a noticeable share of a data plan, typically some tens to a few hundred megabytes, on top of what the drill itself costs; the sensor "Backup drill data used" shows the sum afterwards. The switch refuses from the configured share of the data plan on, and the drill ends by itself after the configured time (*switch back after*) even if the script stops halfway.
+**Mind the data.** A speed test moves data at full speed for some seconds in each direction. Over a mobile backup that is a noticeable share of a data plan, typically some tens to a few hundred megabytes, on top of what the drill itself costs; the sensor "Backup drill data used" shows the sum afterwards. The switch refuses from the configured share of the data plan on, and the drill ends by itself after the configured time (*switch back after*) even if the script stops halfway.
 
 ### Dashboard
 

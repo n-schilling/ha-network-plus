@@ -105,7 +105,7 @@ class Speedtest:
     ping: int | None  # ms
     last_run: datetime | None
     status: str | None
-    uplink: str | None = None  # key of the uplink the test ran over
+    uplink: str | None = None  # key of the uplink the test ran over; None if not reported
     running: bool | None = None  # a test is in progress; None if the console does not say
 
 
@@ -387,7 +387,7 @@ def parse_state(
         active=active,
         last_transition=_timestamp_ms(raw.get("last_lte_failover_transition_timestamp")),
         latency=latency,
-        speedtest=_speedtest(uplink, raw, by_key, active),
+        speedtest=_speedtest(uplink, raw, by_key),
         lte={lte.mac: lte for lte in map(parse_lte, lte_raws)} if lte_raws is not None else None,
         vpn_clients=parse_clients(clients) if clients is not None else None,
     )
@@ -587,45 +587,67 @@ def _availability(stats: dict[str, Any]) -> float | None:
 
 
 def _speedtest(
-    uplink: dict[str, Any], raw: dict[str, Any], uplinks: dict[str, Uplink], active: str | None
+    uplink: dict[str, Any], raw: dict[str, Any], uplinks: dict[str, Uplink]
 ) -> Speedtest | None:
-    """Return the last speed test from the gateway's uplink object and its status block."""
+    """Return the last speed test from the gateway's status block and its uplink object.
+
+    ``speedtest-status`` describes the running test and, once finished, its
+    result; the ``uplink`` object follows about half a minute later (seen
+    live). A finished status block that is at least as new as the uplink
+    object is therefore taken first, so the values and the interface they
+    came over belong together.
+    """
     if not any(k in uplink for k in ("xput_down", "xput_up", "speedtest_lastrun")):
         return None
     status = uplink.get("speedtest_status")
     progress = _dict(raw.get("speedtest-status"))
     summary = _int(progress.get("status_summary"))
+    last_run = _timestamp_s(uplink.get("speedtest_lastrun"))
+    reported = _timestamp_s(progress.get("rundate"))
+    if (
+        summary == SPEEDTEST_FINISHED
+        and reported is not None
+        and (last_run is None or reported >= last_run)
+    ):
+        download = _float(progress.get("xput_download"))
+        upload = _float(progress.get("xput_upload"))
+        ping = _int(progress.get("latency"))
+        last_run = reported
+    else:
+        download = _float(uplink.get("xput_down"))
+        upload = _float(uplink.get("xput_up"))
+        ping = _int(uplink.get("speedtest_ping"))
     return Speedtest(
-        download=_float(uplink.get("xput_down")),
-        upload=_float(uplink.get("xput_up")),
-        ping=_int(uplink.get("speedtest_ping")),
-        last_run=_timestamp_s(uplink.get("speedtest_lastrun")),
+        download=download,
+        upload=upload,
+        ping=ping,
+        last_run=last_run,
         status=str(status) if status else None,
-        uplink=_speedtest_uplink(progress, raw, uplinks, active),
+        uplink=_speedtest_uplink(progress, raw, uplinks),
         running=summary == SPEEDTEST_RUNNING if summary is not None else None,
     )
 
 
 def _speedtest_uplink(
-    progress: dict[str, Any], raw: dict[str, Any], uplinks: dict[str, Uplink], active: str | None
+    progress: dict[str, Any], raw: dict[str, Any], uplinks: dict[str, Uplink]
 ) -> str | None:
-    """Return the key of the uplink the last speed test ran over.
+    """Return the key of the uplink the speed test ran over; None if the gateway does not say.
 
     The status block names the interface (``interface_name``, or
-    ``source_interface`` as ``if!<name>``). A WAN port's ``ifname`` maps it to
-    that port's uplink; any other interface (the LTE backup routes over a
-    tunnel) is the uplink without a port. Without an interface, the uplink
-    that carries the traffic now is the best guess.
+    ``source_interface`` as ``if!<name>``), but only for a while after the
+    test. A WAN port's ``ifname`` maps it to that port's uplink; any other
+    interface (the LTE backup routes over a tunnel) is the uplink without a
+    port.
     """
     interface = progress.get("interface_name")
     if not interface:
         interface = str(progress.get("source_interface") or "").removeprefix("if!")
     if not interface:
-        return active
+        return None
     for uplink in uplinks.values():
         if uplink.port and _dict(raw.get(uplink.port)).get("ifname") == interface:
             return uplink.key
-    return next((u.key for u in uplinks.values() if not u.port), active)
+    return next((u.key for u in uplinks.values() if not u.port), None)
 
 
 def _link(port: dict[str, Any]) -> dict[str, Any]:

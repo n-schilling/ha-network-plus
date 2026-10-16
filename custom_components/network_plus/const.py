@@ -45,6 +45,10 @@ WAN_TYPE_DISABLED: Final = "disabled"
 # in the entry so a restart neither forgets it nor loses a running one
 CONF_DRILL: Final = "drill"
 
+# The uplink the last speed test ran over, by the test's run time, kept in the
+# entry: the gateway names the interface only for a while after the test
+CONF_SPEEDTEST_UPLINK: Final = "speedtest_uplink"
+
 # Options: the link speed a WAN port should negotiate, in Mbit/s, by network group
 EXPECTED_SPEED_OPTIONS: Final[dict[str, str]] = {
     "WAN": "expected_speed_wan",

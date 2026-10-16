@@ -32,6 +32,7 @@ from .api import (
 )
 from .const import (
     CONF_DRILL,
+    CONF_SPEEDTEST_UPLINK,
     DOMAIN,
     ISSUE_ADMIN,
     ISSUE_LTE_LIMIT,
@@ -134,6 +135,8 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._received = False
         # The running or last backup drill, as the entry stored it
         self.drill = Drill.from_dict(entry.data.get(CONF_DRILL))
+        # The uplink the last speed test ran over, by run time, as the entry stored it
+        self._speedtest_uplink = _speedtest_uplink_from(entry.data.get(CONF_SPEEDTEST_UPLINK))
         # Consecutive failed polls, for the repair issue "console unreachable"
         self._failed_polls = 0
         # LTE devices whose data limit is turned off (repair issue per device)
@@ -268,9 +271,47 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             ) from err
 
     def _build(self) -> NetworkState:
-        return parse_state(
+        state = parse_state(
             self._gateway_raw, self._configs, list(self._lte_raws.values()), self._clients
         )
+        return self._place_speedtest(state)
+
+    @callback
+    def _place_speedtest(self, state: NetworkState) -> NetworkState:
+        """Fill in the uplink the last speed test ran over, and remember it.
+
+        The gateway names the test's interface only for a while after the
+        test (seen live: right after it finished, empty a minute later). So
+        the uplink is remembered when a run time is first seen: from the
+        interface if the gateway names it, else the uplink that carries the
+        traffic at that moment. Kept in the entry, so a restart does not
+        reassign a result to whatever uplink is active then.
+        """
+        speedtest = state.speedtest
+        if speedtest is None or speedtest.last_run is None:
+            return state
+        uplink = speedtest.uplink
+        remembered = self._speedtest_uplink
+        if uplink is None:
+            if remembered is not None and remembered[0] == speedtest.last_run:
+                uplink = remembered[1]
+            else:
+                uplink = state.active
+        if uplink is None:
+            return state
+        if (speedtest.last_run, uplink) != remembered:
+            self._speedtest_uplink = (speedtest.last_run, uplink)
+            self.hass.config_entries.async_update_entry(
+                self.config_entry,
+                data={
+                    **self.config_entry.data,
+                    CONF_SPEEDTEST_UPLINK: {
+                        "last_run": speedtest.last_run.isoformat(),
+                        "uplink": uplink,
+                    },
+                },
+            )
+        return replace(state, speedtest=replace(speedtest, uplink=uplink))
 
     @callback
     def note_admin_permission(self, allowed: bool, reason: str = "") -> None:
@@ -471,6 +512,17 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
     def _on_message(self, message: dict[str, Any]) -> None:
         self._received = True
         self.handle_message(message)
+
+
+def _speedtest_uplink_from(data: Any) -> tuple[datetime, str] | None:
+    """Return the stored (run time, uplink key) of the last speed test; None if unreadable."""
+    if not isinstance(data, dict) or not isinstance(data.get("uplink"), str):
+        return None
+    try:
+        last_run = datetime.fromisoformat(str(data.get("last_run")))
+    except ValueError:
+        return None
+    return (last_run, data["uplink"])
 
 
 def _poll_error(err: BaseException) -> BaseException:

@@ -23,7 +23,7 @@ published API. Every request goes through `NetworkClient._request` in
 | Source | Used for | How often |
 |---|---|---|
 | `POST /api/auth/login` | Session cookie; a 401 later logs in again once | On demand |
-| `GET …/stat/device` | Runtime objects of all devices: the gateway (uplink status, addresses, speed test result in `uplink`, its progress and interface in `speedtest-status`, monitors, the WAN ports' `ifname`, `speed`, `full_duplex` and `up`) and the LTE device (data usage, limits, signal, SIM flags `lte_is_sim_pin_required`, `lte_is_sim_pin_verified`, `lte_sim_pin_tries_left`) | Every 60 s |
+| `GET …/stat/device` | Runtime objects of all devices: the gateway (uplink status, addresses, speed test progress, result and interface in `speedtest-status`, the result once more in `uplink`, monitors, the WAN ports' `ifname`, `speed`, `full_duplex` and `up`) and the LTE device (data usage, limits, signal, SIM flags `lte_is_sim_pin_required`, `lte_is_sim_pin_verified`, `lte_sim_pin_tries_left`) | Every 60 s |
 | `GET …/v2/api/site/<site>/wan/enriched-configuration` | Names and failover priorities of the uplinks | Every 60 s |
 | `GET …/v2/api/site/<site>/clients/active?includeTeleport=true` | Remote clients (Teleport, VPN) | Every 60 s |
 | `wss://…/wss/s/<site>/events?clients=v2` | `device:sync` messages with the same runtime objects, about once a second | Continuous |
@@ -135,14 +135,28 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - **SIM problem:** PIN required but not verified, or no PIN tries left. The
   console's `lte_state` is an attribute, not interpreted: only the healthy
   values were seen live.
-- **Speed test uplink:** the gateway's `speedtest-status` names the interface
-  the last test ran over (`interface_name`, also `source_interface` as
-  `if!<name>`). A WAN port's `ifname` (`wan1.ifname` and so on) maps it to
-  that port's uplink; any other interface is the uplink without a port, the
-  LTE backup, which routes over a tunnel (`gre1` live). Without an interface
-  the active uplink is the best guess. The four speed test sensors carry the
-  key and the name as attributes, so values measured over the backup do not
-  pass for the main line's.
+- **Speed test result:** `speedtest-status` is the gateway's status block.
+  While a test runs it carries `status_summary` 1 and no result (`rundate`
+  0, throughputs 0, no interface; the sub-statuses go 0 → 1 → 2); finished,
+  it carries 2, `rundate`, the throughputs, `latency` and the interface. The
+  `uplink` object (`speedtest_lastrun`, `xput_down`, …) follows about 40 s
+  later (seen live). A finished status block that is at least as new as the
+  uplink object is therefore the result; otherwise the uplink object is, so
+  the last result stays visible while a test runs.
+- **Speed test uplink:** the status block names the interface the test ran
+  over (`interface_name`, also `source_interface` as `if!<name>`), but only
+  for a while: live it was there right after the test and hours later, and
+  empty in between. A WAN port's `ifname` (`wan1.ifname` and so on) maps it
+  to that port's uplink; any other interface is the uplink without a port,
+  the LTE backup, which routes over a tunnel (`gre1` live). The coordinator
+  notes the uplink when it first sees a run time (`_place_speedtest`): from
+  the interface if named, else the uplink that carries the traffic at that
+  moment, which the backup recipe keeps active until the result arrived. It
+  is kept in the entry's data (`speedtest_uplink`), so a restart does not
+  reassign a result to whatever uplink is active then; an interface the
+  gateway names later wins. The four speed test sensors carry the key and
+  the name as attributes, so values measured over the backup do not pass for
+  the main line's.
 
 ## The admin opt-in, the switch "Enforce backup uplink" and the button "Run speed test"
 
@@ -184,7 +198,9 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   `speedtest-status.status_summary` says a test is in progress. Switch on,
   wait for the failover, press, wait for a new run time, switch off: that is
   the README's recipe for measuring the backup, and the drill protocol counts
-  the data it costs.
+  the data it costs. Verified live over the cable: the command is accepted
+  with `meta.rc` "ok", the status block shows the run within a few seconds,
+  and the result with the interface about 15 s after the start.
 
 ## Repair issues
 
@@ -278,8 +294,8 @@ while the websocket was recorded. Observed:
 
 - Whether a local API key would work instead of a user; developed and tested
   with user name and password.
-- The values of `speedtest-status.status_summary` other than 2 (finished):
-  1 is taken as running. The gateway also carries a list
+- What `speedtest-status` shows for a failed test; live, 1 (running) and 2
+  (finished) were seen. The gateway also carries a list
   `speedtest-pending-interfaces` (empty live), which hints at tests per
   interface in a later console version.
 - The SIM flags in a fault: live, only a healthy SIM was seen (PIN required

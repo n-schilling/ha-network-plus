@@ -89,12 +89,43 @@ def gateway(
     up: bool = True,
     interface: str | None = "eth8",
     speedtest_summary: int = 2,
+    speedtest_run: int = SPEEDTEST_RUN,
 ) -> dict[str, Any]:
     """Return the gateway's runtime object as stat/device and the websocket send it.
 
-    ``interface`` is the one the last speed test ran over (``speedtest-status``);
-    ``speedtest_summary`` its status, 2 for finished.
+    ``speedtest-status`` is the status block of the speed test: ``interface``
+    the one it ran over (the gateway names it only for a while after the
+    test), ``speedtest_summary`` its status, 2 for finished, 1 for running
+    (then without a result and an interface, as seen live).
     """
+    if speedtest_summary == 1:
+        progress: dict[str, Any] = {
+            "interface_name": None,
+            "source_interface": "",
+            "rundate": 0,
+            "runtime": 0,
+            "status_download": 1,
+            "status_ping": 2,
+            "status_summary": 1,
+            "status_upload": 0,
+            "xput_download": 0.0,
+            "xput_upload": 0.0,
+            "latency": 18,
+        }
+    else:
+        progress = {
+            "interface_name": interface,
+            "source_interface": f"if!{interface}" if interface else "",
+            "rundate": speedtest_run,
+            "runtime": 26,
+            "status_download": speedtest_summary,
+            "status_ping": speedtest_summary,
+            "status_summary": speedtest_summary,
+            "status_upload": speedtest_summary,
+            "xput_download": download,
+            "xput_upload": 54.0,
+            "latency": 18,
+        }
     return {
         "mac": mac,
         "type": "udm",
@@ -116,7 +147,7 @@ def gateway(
             "comment": active,
             "name": "eth8",
             "latency": 15,
-            "speedtest_lastrun": SPEEDTEST_RUN,
+            "speedtest_lastrun": speedtest_run,
             "speedtest_ping": 18,
             "speedtest_status": "Success",
             "xput_down": download,
@@ -126,18 +157,7 @@ def gateway(
             "WAN": {"availability": 100.0, "latency_average": latency},
             "WAN_LTE_FAILOVER": {"availability": 99.5, "latency_average": 158},
         },
-        "speedtest-status": {
-            "interface_name": interface,
-            "source_interface": f"if!{interface}" if interface else None,
-            "rundate": SPEEDTEST_RUN,
-            "runtime": 26,
-            "status_download": speedtest_summary,
-            "status_ping": speedtest_summary,
-            "status_summary": speedtest_summary,
-            "status_upload": speedtest_summary,
-            "xput_download": download,
-            "xput_upload": 54.0,
-        },
+        "speedtest-status": progress,
         "last_lte_failover_transition_timestamp": transition,
     }
 

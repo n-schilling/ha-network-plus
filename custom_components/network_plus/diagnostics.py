@@ -15,7 +15,13 @@ from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_ADMIN_PASSWORD, CONF_ADMIN_USERNAME, CONF_DRILL, CONF_ENFORCED_AT
+from .const import (
+    CONF_ADMIN_PASSWORD,
+    CONF_ADMIN_USERNAME,
+    CONF_DRILL,
+    CONF_ENFORCED_AT,
+    CONF_SPEEDTEST_UPLINK,
+)
 from .coordinator import NetworkConfigEntry
 
 UPLINK_FIELDS = (
@@ -65,6 +71,7 @@ async def async_get_config_entry_diagnostics(
                 # Times
                 CONF_ENFORCED_AT,
                 CONF_DRILL,
+                CONF_SPEEDTEST_UPLINK,
             },
         ),
         "options": dict(entry.options),
