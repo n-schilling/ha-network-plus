@@ -5,17 +5,18 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from custom_components.network_plus.model import (
-    EVENT_BRIEF_FAILOVER,
     EVENT_FAILOVER,
     EVENT_PUBLIC_IP_CHANGED,
     EVENT_RESTORED,
     EVENT_UPLINK_DOWN,
     EVENT_UPLINK_UP,
     VpnClient,
+    brief_failover_candidate,
+    detect_active_events,
     detect_address_events,
-    detect_events,
     detect_online_events,
     essentials,
+    normalize_mac,
     parse_clients,
     parse_lte,
     parse_state,
@@ -139,12 +140,14 @@ def test_missing_and_odd_fields() -> None:
 
 def test_events_failover_and_restore() -> None:
     """Switching to the backup and back are two events, each naming both uplinks."""
+    known: dict[str, str] = {}
     normal = parse_state(gateway(), wan_configs())
+    assert detect_active_events(known, normal) == []  # the first state only seeds
     backup = parse_state(
         gateway(wan="offline", active="WAN_LTE_FAILOVER", transition=TRANSITION + 1000),
         wan_configs(),
     )
-    events = detect_events(normal, backup)
+    events = detect_active_events(known, backup)
     assert [e.type for e in events] == [EVENT_FAILOVER]
     assert events[0].attributes == {
         "from_uplink": "WAN",
@@ -152,8 +155,20 @@ def test_events_failover_and_restore() -> None:
         "to_uplink": "WAN_LTE_FAILOVER",
         "to_uplink_name": "LTE",
     }
+    assert detect_active_events(known, backup) == []
     back = parse_state(gateway(transition=TRANSITION + 2000), wan_configs())
-    assert [e.type for e in detect_events(backup, back)] == [EVENT_RESTORED]
+    assert [e.type for e in detect_active_events(known, back)] == [EVENT_RESTORED]
+
+
+def test_active_events_through_unknown() -> None:
+    """A switch through a state with an unknown active uplink still fires."""
+    known: dict[str, str] = {}
+    detect_active_events(known, parse_state(gateway(), wan_configs()))
+    unknown = parse_state(gateway(wan="degraded", active="eth9"), wan_configs())
+    assert unknown.active is None
+    assert detect_active_events(known, unknown) == []
+    backup = parse_state(gateway(wan="offline", active="WAN_LTE_FAILOVER"), wan_configs())
+    assert [e.type for e in detect_active_events(known, backup)] == [EVENT_FAILOVER]
 
 
 def test_online_events_through_unknown() -> None:
@@ -172,40 +187,51 @@ def test_online_events_through_unknown() -> None:
 
 
 def test_brief_failover() -> None:
-    """A newer switching time without a seen switch is a brief failover."""
+    """A newer switching time without a seen switch is a candidate for a brief failover."""
     before = parse_state(gateway(), wan_configs())
     after = parse_state(gateway(transition=TRANSITION + 5000), wan_configs())
-    events = detect_events(before, after)
-    assert [e.type for e in events] == [EVENT_BRIEF_FAILOVER]
-    assert events[0].attributes == {"at": after.last_transition.isoformat()}  # type: ignore[union-attr]
+    assert brief_failover_candidate(before, after, None) == after.last_transition
+    # No candidate without timestamps, without a change, or off the preferred uplink
+    assert brief_failover_candidate(after, after, None) is None
+    assert brief_failover_candidate(after, before, None) is None
+    none = parse_state(gateway(transition=0), wan_configs())
+    assert brief_failover_candidate(none, after, None) is None
+    assert brief_failover_candidate(before, none, None) is None
+    on_lte = parse_state(
+        gateway(active="WAN_LTE_FAILOVER", transition=TRANSITION + 1), wan_configs()
+    )
+    assert brief_failover_candidate(before, on_lte, None) is None
 
 
 def test_no_events() -> None:
     """Nothing happens without a change, an unknown status or a missing uplink."""
     state = parse_state(gateway(), wan_configs())
-    assert detect_events(state, state) == []
+    online: dict[str, bool] = {}
+    active: dict[str, str] = {}
+    detect_online_events(online, state)
+    detect_active_events(active, state)
+    assert detect_online_events(online, state) == []
+    assert detect_active_events(active, state) == []
     unknown = parse_state(gateway(wan="degraded"), wan_configs())
-    assert detect_events(state, unknown) == []
+    assert detect_online_events(online, unknown) == []
     raw = gateway()
     raw["last_wan_status"]["WAN2"] = "online"
-    assert detect_events(state, parse_state(raw, wan_configs())) == []
-    # A newer switching time while on the backup is no brief failover
-    backup = parse_state(gateway(active="WAN_LTE_FAILOVER"), wan_configs())
-    later = parse_state(
-        gateway(active="WAN_LTE_FAILOVER", transition=TRANSITION + 1), wan_configs()
-    )
-    assert detect_events(backup, later) == []
+    assert detect_online_events(online, parse_state(raw, wan_configs())) == []
 
 
 def test_event_name_of_vanished_uplink() -> None:
     """An uplink the gateway no longer reports is named by its key."""
-    raw = gateway(active="WAN2")
-    raw["last_wan_status"]["WAN2"] = "online"
-    before = parse_state(raw, wan_configs())
-    after = parse_state(gateway(), wan_configs())
-    event = detect_events(before, after)[0]
+    known = {"active": "WAN2"}
+    event = detect_active_events(known, parse_state(gateway(), wan_configs()))[0]
     assert event.type == EVENT_RESTORED
     assert event.attributes["from_uplink_name"] == "WAN2"
+
+
+def test_normalize_mac() -> None:
+    """MACs compare lower case; a missing one is empty."""
+    assert normalize_mac("02:A1:B2:C3:D4:E5") == "02:a1:b2:c3:d4:e5"
+    assert normalize_mac(None) == ""
+    assert normalize_mac("") == ""
 
 
 def test_availability_of_a_down_uplink() -> None:
@@ -404,17 +430,14 @@ def test_address_events_across_an_outage() -> None:
     assert events[1].attributes["family"] == "ipv6"
     assert events[1].attributes["address"] == "2001:db8::8"
     assert detect_address_events(known, after) == []
-    # detect_events itself leaves addresses alone
-    assert detect_events(before, after) == []
 
 
 def test_brief_failover_not_for_a_seen_switch() -> None:
-    """A transition timestamp older than the last seen switch is no brief failover."""
+    """A transition timestamp within the tolerance after the last seen switch is no candidate."""
     before = parse_state(gateway(), wan_configs())
     after = parse_state(gateway(transition=TRANSITION + 5000), wan_configs())
     assert after.last_transition is not None
-    # Within the tolerance for clock differences and a lagging timestamp: no event
-    assert detect_events(before, after, after.last_transition + timedelta(seconds=1)) == []
-    assert detect_events(before, after, after.last_transition - timedelta(seconds=29)) == []
-    events = detect_events(before, after, after.last_transition - timedelta(seconds=31))
-    assert [e.type for e in events] == [EVENT_BRIEF_FAILOVER]
+    seen = after.last_transition
+    assert brief_failover_candidate(before, after, seen + timedelta(seconds=1)) is None
+    assert brief_failover_candidate(before, after, seen - timedelta(seconds=29)) is None
+    assert brief_failover_candidate(before, after, seen - timedelta(seconds=31)) == seen

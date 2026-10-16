@@ -35,6 +35,9 @@ def create_client(hass: HomeAssistant, data: dict[str, object]) -> NetworkClient
 async def async_setup_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> bool:
     """Set up one console."""
     client = create_client(hass, dict(entry.data))
+    # Home Assistant detaches the session with the entry as well, also after
+    # a failed setup; this makes it visible and independent of that
+    entry.async_on_unload(client.detach)
     # The config flow sets the gateway's MAC as unique ID
     coordinator = NetworkCoordinator(hass, entry, client, str(entry.unique_id))
     await coordinator.async_config_entry_first_refresh()

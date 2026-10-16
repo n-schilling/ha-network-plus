@@ -33,8 +33,10 @@ LOCAL_CLIENT_TYPES = frozenset({"WIRED", "WIRELESS"})
 _WAN_GROUP = re.compile(r"^WAN(\d*)$")
 
 # A transition timestamp this close to a seen switch of the active uplink
-# belongs to that switch: the console's clock and Home Assistant's may differ
-# by a few seconds, and the timestamp may arrive a push later.
+# belongs to that switch, and a fresh timestamp waits this long for a switch
+# to follow before it counts as a brief failover: the console's clock and
+# Home Assistant's may differ by a few seconds, and the timestamp may arrive
+# a push before or after the switch itself.
 SWITCH_TOLERANCE = timedelta(seconds=30)
 
 # Event types of the "Internet" event entity
@@ -52,6 +54,11 @@ EVENT_TYPES = [
     EVENT_UPLINK_UP,
     EVENT_PUBLIC_IP_CHANGED,
 ]
+
+
+def normalize_mac(value: Any) -> str:
+    """Return the MAC as the console sends it, lower case; "" if there is none."""
+    return str(value or "").lower()
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,7 +225,7 @@ def parse_state(
 
     return NetworkState(
         gateway=Gateway(
-            mac=str(raw.get("mac", "")).lower(),
+            mac=normalize_mac(raw.get("mac")),
             name=str(raw.get("name") or raw.get("model") or "Gateway"),
             model=str(raw.get("model") or "") or "Gateway",
             version=str(raw["version"]) if raw.get("version") else None,
@@ -242,7 +249,7 @@ def parse_lte(raw: dict[str, Any]) -> LteBackup:
     rx, tx = _int(raw.get("rx_bytes")), _int(raw.get("tx_bytes"))
     in_use = raw.get("lte_failover")
     return LteBackup(
-        mac=str(raw.get("mac", "")).lower(),
+        mac=normalize_mac(raw.get("mac")),
         name=str(raw.get("name") or raw.get("model") or "LTE backup"),
         model=str(raw.get("model") or "") or "LTE backup",
         version=str(raw["version"]) if raw.get("version") else None,
@@ -280,41 +287,57 @@ def parse_clients(clients: list[Any]) -> tuple[VpnClient, ...]:
     return tuple(sorted(remote, key=lambda c: (c.type, c.name)))
 
 
-def detect_events(
-    old: NetworkState, new: NetworkState, switch_seen_at: datetime | None = None
-) -> list[UplinkEvent]:
-    """Return what happened between two states, oldest first.
+# Key of the last known active uplink in the dict ``detect_active_events`` keeps
+ACTIVE = "active"
 
-    ``switch_seen_at`` is when the last change of the active uplink was seen;
-    a transition timestamp from before that belongs to a failover that was
-    seen and is no brief failover. Uplinks going down or up and address
-    changes are found against the last known values, see
-    ``detect_online_events`` and ``detect_address_events``.
+
+def detect_active_events(known: dict[str, str], state: NetworkState) -> list[UplinkEvent]:
+    """Return a failover or return against the last known active uplink, and remember it.
+
+    Comparing against the last known uplink instead of the previous state
+    catches a switch that passes through a state with an unknown active uplink.
     """
-    events: list[UplinkEvent] = []
-    if old.active is not None and new.active is not None and old.active != new.active:
-        events.append(
-            UplinkEvent(
-                EVENT_RESTORED if new.active == new.primary else EVENT_FAILOVER,
-                {
-                    "from_uplink": old.active,
-                    "from_uplink_name": _name(new, old.active),
-                    "to_uplink": new.active,
-                    "to_uplink_name": _name(new, new.active),
-                },
-            )
+    active = state.active
+    if active is None:
+        return []
+    previous = known.get(ACTIVE)
+    known[ACTIVE] = active
+    if previous is None or previous == active:
+        return []
+    return [
+        UplinkEvent(
+            EVENT_RESTORED if active == state.primary else EVENT_FAILOVER,
+            {
+                "from_uplink": previous,
+                "from_uplink_name": _name(state, previous),
+                "to_uplink": active,
+                "to_uplink_name": _name(state, active),
+            },
         )
-    elif (
-        old.last_transition is not None
-        and new.last_transition is not None
-        and new.last_transition > old.last_transition
-        and old.active == new.active == new.primary
-        and (switch_seen_at is None or new.last_transition > switch_seen_at + SWITCH_TOLERANCE)
-    ):
-        # The gateway switched to the backup and back between two states
-        # this integration saw, for example while it was not connected.
-        events.append(UplinkEvent(EVENT_BRIEF_FAILOVER, {"at": new.last_transition.isoformat()}))
-    return events
+    ]
+
+
+def brief_failover_candidate(
+    previous: NetworkState, state: NetworkState, switch_seen_at: datetime | None
+) -> datetime | None:
+    """Return a transition timestamp that grew while the active uplink stayed the preferred one.
+
+    That is the trace of a failover and return the integration did not see,
+    for example while it was not connected. It is only a candidate: the
+    gateway may report the timestamp a push before the switch itself, so the
+    caller waits ``SWITCH_TOLERANCE`` for a failover to follow before it
+    reports a brief failover. A timestamp within the tolerance after the last
+    seen switch belongs to that switch.
+    """
+    if previous.last_transition is None or state.last_transition is None:
+        return None
+    if state.last_transition <= previous.last_transition:
+        return None
+    if not (previous.active == state.active == state.primary):
+        return None
+    if switch_seen_at is not None and state.last_transition <= switch_seen_at + SWITCH_TOLERANCE:
+        return None
+    return state.last_transition
 
 
 def detect_online_events(known: dict[str, bool], state: NetworkState) -> list[UplinkEvent]:

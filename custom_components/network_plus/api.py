@@ -22,6 +22,7 @@ from aiohttp import (
 )
 
 from .const import SITE
+from .model import normalize_mac
 
 TIMEOUT = ClientTimeout(total=15)
 # Seconds between websocket pings; a silent connection is noticed after twice that.
@@ -81,7 +82,14 @@ class NetworkClient:
                     timeout=TIMEOUT,
                 ) as resp:
                     if resp.status in (400, 401, 403):
-                        raise NetworkAuthError(f"login rejected (HTTP {resp.status})")
+                        # The console answers wrong credentials with 403 and an
+                        # error code; 400 and 403 without it mean something else,
+                        # for example a console that is still starting
+                        code = await _error_code(resp)
+                        if resp.status == 401 or code.startswith("AUTHENTICATION_FAILED"):
+                            raise NetworkAuthError(f"login rejected ({code or resp.status})")
+                        detail = f" {code}" if code else ""
+                        raise NetworkError(f"login refused (HTTP {resp.status}{detail})")
                     _raise_for_status(resp)
             except (ClientError, TimeoutError) as err:
                 raise NetworkError(_describe(err)) from err
@@ -191,7 +199,7 @@ def find_gateway(devices: list[dict[str, Any]], mac: str | None = None) -> dict[
     for device in devices:
         if device.get("type") not in GATEWAY_TYPES:
             continue
-        if mac is None or str(device.get("mac", "")).lower() == mac.lower():
+        if mac is None or normalize_mac(device.get("mac")) == normalize_mac(mac):
             return device
     return None
 
@@ -204,6 +212,15 @@ def is_lte_device(device: dict[str, Any]) -> bool:
 def find_lte_devices(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return the LTE backup devices among the devices."""
     return [d for d in devices if is_lte_device(d)]
+
+
+async def _error_code(resp: ClientResponse) -> str:
+    """Return the error code of the console's answer, "" if there is none."""
+    try:
+        body = await resp.json(content_type=None)
+    except ValueError:
+        return ""
+    return str(body.get("code") or "") if isinstance(body, dict) else ""
 
 
 def _raise_for_status(resp: ClientResponse) -> None:

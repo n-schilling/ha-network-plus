@@ -41,15 +41,16 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - `model.py` turns raw objects into frozen dataclasses (`NetworkState`,
   `Uplink`, `Speedtest`, `LteBackup`, `VpnClient`). Only named fields are
   taken over; raw objects never leave the coordinator.
-- `detect_events(old, new, switch_seen_at)` derives the events of the event
-  entity from two states: uplink down/up, failover/restored, and a brief
-  failover (the gateway's transition timestamp moved while the active uplink
-  stayed the preferred one; a timestamp older than the last seen switch is
-  ignored, because it belongs to a failover that was seen).
-  `detect_online_events` and `detect_address_events` compare against the
-  last known status or address per uplink, so a change that passes through
-  an unknown status or a state without an address (PPPoE reconnect, outage)
-  still fires.
+- The events of the event entity are derived from state changes:
+  `detect_online_events`, `detect_active_events` and `detect_address_events`
+  compare against the last known status, active uplink or address, so a
+  change that passes through an unknown state in between (PPPoE reconnect,
+  outage, an unmapped status value) still fires.
+- A grown transition timestamp while the active uplink stays the preferred
+  one is only a candidate for a brief failover: the gateway may report the
+  timestamp a push before the switch itself. The candidate is reported once
+  `SWITCH_TOLERANCE` (30 s) passed without a switch, and dropped when a
+  switch follows.
 - **Push gate:** the websocket sends the gateway about once a second with
   latency values that differ nearly every time. A push updates the state only
   when `essentials()` changed: an uplink's online state or address, the active
@@ -66,11 +67,24 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   object, and the poll decides which LTE devices exist.
 - The websocket listener survives anything a push can contain: parsing
   tolerates Infinity, NaN, timestamps beyond any clock and odd field types,
-  and an unexpected exception is logged, not fatal. A rejected login ends the
-  listener instead of repeating the login; the poll starts the reauth flow and
-  the entry is reloaded after it.
+  and an unexpected exception is logged, not fatal. A rejected login is
+  retried only after the longest delay (5 min): wrong credentials go through
+  the poll's reauth flow and a reload, while a console that is starting up
+  rejects logins for a while and then works again.
+- The console answers wrong credentials with 403 and an `AUTHENTICATION_FAILED…`
+  error code; a 400 or 403 without that code (a console still starting, a
+  blocked request) is a network error, not a reason for reauthentication.
+- A push that changes the state sets the coordinator's data and notifies the
+  listeners directly, so the poll timer stays untouched; `async_set_updated_data`
+  would reschedule the poll and a flapping uplink could postpone it for good.
+- The reconnect delay resets only after a connection that delivered a
+  message; connections the console closes at once back off like failures.
 - Uplink names are part of entity names (translation placeholders). When a
-  poll finds an uplink renamed in UniFi Network, the entry is reloaded.
+  poll finds an uplink renamed in UniFi Network, the entry is reloaded. Only
+  names from the uplink configuration count; an uplink missing from one
+  incomplete answer falls back to its key, which is no rename.
+- Parsing a push costs about 20 µs on a desktop CPU (measured), a few times
+  that on a Raspberry Pi; at one push per second that is not worth a cache.
 - Concurrent requests that find the session rejected share one new login:
   each request remembers the login generation it was sent with, and a 401
   only marks the session expired if nobody logged in since.
@@ -110,8 +124,9 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - **Own aiohttp session** via `async_create_clientsession` with
   `CookieJar(unsafe=True)`: the console's login is a cookie, and consoles are
   usually addressed by IP, which the default jar rejects. Home Assistant
-  detaches a session created during entry setup when the entry unloads; the
-  config flow detaches its own after each check.
+  detaches a session created during entry setup when the entry unloads, also
+  after a failed setup; the entry registers the detach as well so it is
+  visible, and the config flow detaches its own after each check.
 - **Certificate check is an option, on by default.** Consoles ship with a
   self-signed certificate; the option exists so nobody has to turn off
   verification globally.

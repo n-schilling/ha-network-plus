@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
 
+from freezegun.api import FrozenDateTimeFactory
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.util import dt as dt_util
 
 from custom_components.network_plus.api import NetworkAuthError, NetworkError
 from custom_components.network_plus.const import DOMAIN
@@ -236,43 +239,61 @@ async def test_unknown_active_uplink(
 async def test_websocket_reconnects(
     hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
 ) -> None:
-    """Failed attempts wait longer each time; a connection that stood is retried soon."""
+    """Failed or empty attempts wait longer each time; a connection that delivered is retried soon."""
     coordinator = setup_entry.runtime_data.coordinator
     assert coordinator.websocket_connected is True
     delays: list[float] = []
     real_sleep = asyncio.sleep
 
     async def fake_sleep(delay: float, *args: Any) -> None:
-        delays.append(delay)
+        if delay:  # asyncio.sleep(0) of Home Assistant itself goes through the patch as well
+            delays.append(delay)
         await real_sleep(0)
 
+    async def _wait_for_next_listen() -> None:
+        calls = console.listen_calls
+        while console.listen_calls == calls:
+            await real_sleep(0)
+
     with patch("custom_components.network_plus.coordinator.asyncio.sleep", fake_sleep):
-        # The standing connection closes, then every attempt is refused
+        # The standing connection delivered a message and closes, then every attempt is refused
+        await console.push(hass, sync(gateway()))
         console.listen_error = NetworkError("refused")
         console.messages.put_nowait(CLOSE)
         while console.listen_calls < 5:
             await real_sleep(0)
         assert coordinator.websocket_connected is False
         assert delays[:4] == [5.0, 5.0, 10.0, 20.0]
-        # A connection stands again and drops with an error: retried soon
+        # A connection stands again, delivers, and drops with an error: retried soon
         console.listen_error = None
         await console.listening.wait()
         assert coordinator.websocket_connected is True
+        await console.push(hass, sync(gateway()))
         console.close_with_error = True
-        calls = console.listen_calls
         console.messages.put_nowait(CLOSE)
-        while console.listen_calls == calls:
-            await real_sleep(0)
-    assert delays[-1] == 5.0
+        await _wait_for_next_listen()
+        assert delays[-1] == 5.0
+        # Connections the console closes at once, without a message, back off again
+        console.close_with_error = False
+        await console.listening.wait()
+        console.messages.put_nowait(CLOSE)
+        await _wait_for_next_listen()
+        await console.listening.wait()
+        console.messages.put_nowait(CLOSE)
+        await _wait_for_next_listen()
+    assert delays[-2:] == [5.0, 10.0]
     assert max(delays) <= 300.0
 
 
-async def test_unload(hass: HomeAssistant, setup_entry: MockConfigEntry) -> None:
-    """Unloading stops the websocket and the entities."""
+async def test_unload(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """Unloading stops the websocket and the entities and gives the session back."""
     assert await hass.config_entries.async_unload(setup_entry.entry_id)
     await hass.async_block_till_done()
     assert setup_entry.state is ConfigEntryState.NOT_LOADED
     assert hass.states.get(WAN).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
+    assert console.detached == 1
 
 
 async def test_speedtest_latency_and_vpn_sensors(
@@ -487,15 +508,22 @@ async def test_poll_overlapped_by_push_keeps_the_push(
 
 
 async def test_uplink_renamed_reloads_entry(
-    hass: HomeAssistant,
-    setup_entry: MockConfigEntry,
-    console: FakeConsole,
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
 ) -> None:
     """Entity names carry the uplink names; a rename in UniFi Network renews them."""
+    coordinator = setup_entry.runtime_data.coordinator
     assert hass.states.get(WAN).attributes["friendly_name"] == "Gateway Cable"  # type: ignore[union-attr]
+    # An uplink missing from one configuration answer is no rename
+    cable = console.configs.pop(0)
+    await _poll(hass, setup_entry)
+    assert setup_entry.runtime_data.coordinator is coordinator
+    console.configs.insert(0, cable)
+    await _poll(hass, setup_entry)
+    assert setup_entry.runtime_data.coordinator is coordinator
     console.configs[0]["name"] = "Fibre"
     await _poll(hass, setup_entry)
     assert setup_entry.state is ConfigEntryState.LOADED
+    assert setup_entry.runtime_data.coordinator is not coordinator
     assert hass.states.get(WAN).attributes["friendly_name"] == "Gateway Fibre"  # type: ignore[union-attr]
 
 
@@ -610,23 +638,67 @@ async def test_unexpected_push_does_not_end_the_listener(
     assert console.listen_calls == calls + 1
 
 
-async def test_rejected_login_stops_the_listener(
+async def test_rejected_login_waits_before_trying_again(
     hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
 ) -> None:
-    """A rejected login ends the websocket loop instead of repeating the login."""
+    """A rejected login is retried only after the longest delay, and the listener comes back."""
     coordinator = setup_entry.runtime_data.coordinator
-    calls = console.listen_calls
+    delays: list[float] = []
     real_sleep = asyncio.sleep
 
-    async def fake_sleep(_delay: float, *args: Any) -> None:
+    async def fake_sleep(delay: float, *args: Any) -> None:
+        if delay:  # asyncio.sleep(0) of Home Assistant itself goes through the patch as well
+            delays.append(delay)
         await real_sleep(0)
 
     console.listen_error = NetworkAuthError("no")
     with patch("custom_components.network_plus.coordinator.asyncio.sleep", fake_sleep):
-        console.messages.put_nowait(
-            CLOSE
-        )  # the standing connection ends; the next login is rejected
-        for _ in range(50):
+        console.messages.put_nowait(CLOSE)
+        while console.listen_calls < 4:
             await real_sleep(0)
-    assert console.listen_calls == calls + 1  # one rejected attempt, then no more
-    assert coordinator.websocket_connected is False
+        assert coordinator.websocket_connected is False
+        assert set(delays[1:]) == {300.0}
+        # The console accepts the login again, for example after it booted
+        console.listen_error = None
+        await console.listening.wait()
+    assert coordinator.websocket_connected is True
+
+
+async def test_push_does_not_postpone_the_poll(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A push with an essential change leaves the poll timer alone."""
+    coordinator = setup_entry.runtime_data.coordinator
+    timer = coordinator._unsub_refresh
+    assert timer is not None
+    await console.push(hass, sync(gateway(wan="offline", active="WAN_LTE_FAILOVER")))
+    assert _state(hass, ACTIVE) == "wan_lte_failover"
+    assert coordinator._unsub_refresh is timer
+
+
+async def test_brief_failover_waits_for_a_switch_to_follow(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A fresh transition timestamp is no brief failover while a switch may still follow."""
+    fresh = int(dt_util.utcnow().timestamp() * 1000)
+    # The timestamp arrives a push before the switch: no brief failover, one failover
+    await console.push(hass, sync(gateway(transition=fresh)))
+    assert _state(hass, EVENT) == STATE_UNKNOWN
+    await console.push(
+        hass, sync(gateway(wan="offline", active="WAN_LTE_FAILOVER", transition=fresh))
+    )
+    assert hass.states.get(EVENT).attributes["event_type"] == "failover"  # type: ignore[union-attr]
+    await console.push(hass, sync(gateway(transition=fresh)))
+    assert hass.states.get(EVENT).attributes["event_type"] == "restored"  # type: ignore[union-attr]
+    # A fresh timestamp that no switch follows is a brief failover once the tolerance passed
+    freezer.tick(timedelta(seconds=60))
+    later = int(dt_util.utcnow().timestamp() * 1000)
+    await console.push(hass, sync(gateway(transition=later)))
+    assert hass.states.get(EVENT).attributes["event_type"] == "restored"  # type: ignore[union-attr]
+    freezer.tick(timedelta(seconds=31))
+    console.set_gateway(gateway(transition=later))
+    await _poll(hass, setup_entry)
+    assert hass.states.get(EVENT).attributes["event_type"] == "brief_failover"  # type: ignore[union-attr]

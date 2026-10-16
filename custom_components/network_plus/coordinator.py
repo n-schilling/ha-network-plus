@@ -25,14 +25,16 @@ from .api import (
 )
 from .const import DOMAIN, RECONNECT_MAX, RECONNECT_MIN, UPDATE_INTERVAL
 from .model import (
-    EVENT_FAILOVER,
-    EVENT_RESTORED,
+    EVENT_BRIEF_FAILOVER,
+    SWITCH_TOLERANCE,
     NetworkState,
     UplinkEvent,
+    brief_failover_candidate,
+    detect_active_events,
     detect_address_events,
-    detect_events,
     detect_online_events,
     essentials,
+    normalize_mac,
     parse_state,
 )
 
@@ -95,11 +97,17 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         # which are newer than its own snapshot
         self._pushed_macs: set[str] = set()
         self._event_listeners: list[Callable[[UplinkEvent], None]] = []
-        # Last known status and address per uplink, for changes across a gap
+        # Last known status and address per uplink and the last known active
+        # uplink, for changes across a gap or an unknown state in between
         self._known_online: dict[str, bool] = {}
         self._known_addresses: dict[tuple[str, str], str] = {}
-        # When the active uplink was last seen changing
+        self._known_active: dict[str, str] = {}
+        # When the active uplink was last seen changing, and a transition
+        # timestamp that may turn out to be a brief failover
         self._switch_seen_at: datetime | None = None
+        self._pending_brief: datetime | None = None
+        # Whether the current websocket connection delivered a message
+        self._received = False
 
     async def _async_update_data(self) -> NetworkState:
         self._pushed_macs.clear()
@@ -141,11 +149,11 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._lte_raws = {
             mac: self._lte_raws[mac] if mac in pushed and mac in self._lte_raws else raw
             for raw in find_lte_devices(devices)
-            if (mac := _mac(raw))
+            if (mac := normalize_mac(raw.get("mac")))
         }
         state = self._build()
         previous: NetworkState | None = self.data
-        if previous is not None and _renamed(previous, state):
+        if previous is not None and _renamed(previous, state, self._configs):
             # Entity names carry the uplink names; a reload renews them
             self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
         self._notify(state)
@@ -169,17 +177,35 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
 
     @callback
     def _notify(self, state: NetworkState) -> None:
-        """Pass the events between the last known state and ``state`` on."""
-        # The first state only seeds the known statuses and addresses
-        online = detect_online_events(self._known_online, state)
-        addresses = detect_address_events(self._known_addresses, state)
-        events = online + addresses
+        """Pass the events between the last known state and ``state`` on.
+
+        The first state only seeds what is known; it produces no events.
+        """
+        now = dt_util.utcnow()
+        events = detect_online_events(self._known_online, state)
+        switches = detect_active_events(self._known_active, state)
+        if switches:
+            self._switch_seen_at = now
+            # A timestamp that preceded this switch was its herald, no brief failover
+            self._pending_brief = None
+        events += switches
         # None before the first refresh, although the type says otherwise
         previous: NetworkState | None = self.data
         if previous is not None:
-            events = online + detect_events(previous, state, self._switch_seen_at) + addresses
-            if any(e.type in (EVENT_FAILOVER, EVENT_RESTORED) for e in events):
-                self._switch_seen_at = dt_util.utcnow()
+            candidate = brief_failover_candidate(previous, state, self._switch_seen_at)
+            if candidate is not None:
+                self._pending_brief = candidate
+            if (
+                self._pending_brief is not None
+                and not switches
+                and state.active == state.primary
+                and now - self._pending_brief >= SWITCH_TOLERANCE
+            ):
+                events.append(
+                    UplinkEvent(EVENT_BRIEF_FAILOVER, {"at": self._pending_brief.isoformat()})
+                )
+                self._pending_brief = None
+        events += detect_address_events(self._known_addresses, state)
         for event in events:
             for listener in list(self._event_listeners):
                 listener(event)
@@ -195,7 +221,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         data = message.get("data")
         changed = False
         for raw in data if isinstance(data, list) else []:
-            if not isinstance(raw, dict) or not (mac := _mac(raw)):
+            if not isinstance(raw, dict) or not (mac := normalize_mac(raw.get("mac"))):
                 continue
             if mac == self.mac:
                 if partial:
@@ -221,20 +247,26 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         previous: NetworkState | None = self.data
         if previous is None or essentials(state) != essentials(previous):
             self._notify(state)
-            self.async_set_updated_data(state)
+            # Not async_set_updated_data: that would reschedule the poll, and a
+            # flapping uplink could postpone it for good
+            self.data = state
+            self.async_update_listeners()
 
     async def async_listen(self) -> None:
         """Keep the websocket connected for as long as the entry is loaded."""
         delay = RECONNECT_MIN
         while True:
+            self._received = False
             try:
-                await self.client.listen(self.handle_message, self._on_connect)
+                await self.client.listen(self._on_message, self._on_connect)
             except NetworkAuthError as err:
-                # The poll starts the reauth flow and the entry is reloaded
-                # after it; trying again here would only repeat the rejected login
-                _LOGGER.debug("Websocket login rejected, waiting for reauthentication: %s", err)
+                # Wrong credentials: the poll starts the reauth flow and the
+                # entry is reloaded after it. A console that is starting up
+                # answers the same way, so try again, but rarely.
+                _LOGGER.debug("Websocket login rejected: %s", err)
                 self.websocket_connected = False
-                return
+                await asyncio.sleep(RECONNECT_MAX)
+                continue
             except NetworkError as err:
                 _LOGGER.debug("Websocket ended: %s", err)
             except Exception:
@@ -242,9 +274,10 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
                 _LOGGER.exception("Unexpected error while handling a websocket message")
             else:
                 _LOGGER.debug("Websocket closed")
-            # A connection that stood is retried soon, however it ended;
-            # only failed attempts wait longer each time
-            worked = self.websocket_connected
+            # A connection that delivered messages is retried soon, however it
+            # ended; attempts that failed or were closed at once wait longer
+            # each time
+            worked = self._received
             self.websocket_connected = False
             if worked:
                 delay = RECONNECT_MIN
@@ -255,6 +288,11 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
     @callback
     def _on_connect(self) -> None:
         self.websocket_connected = True
+
+    @callback
+    def _on_message(self, message: dict[str, Any]) -> None:
+        self._received = True
+        self.handle_message(message)
 
 
 def _poll_error(err: BaseException) -> BaseException:
@@ -270,12 +308,17 @@ def _poll_error(err: BaseException) -> BaseException:
     return err
 
 
-def _mac(raw: dict[str, Any]) -> str:
-    return str(raw.get("mac", "")).lower()
+def _renamed(previous: NetworkState, state: NetworkState, configs: list[dict[str, Any]]) -> bool:
+    """Return whether an uplink carries another name than before.
 
-
-def _renamed(previous: NetworkState, state: NetworkState) -> bool:
+    Only names from the uplink configuration count: an uplink missing from an
+    incomplete answer falls back to its key, and that is no rename.
+    """
+    configured = {c.get("wan_networkgroup") for c in configs}
     return any(
-        (before := previous.uplinks.get(key)) is not None and before.name != uplink.name
+        key in configured
+        and (before := previous.uplinks.get(key)) is not None
+        and before.name != before.key
+        and before.name != uplink.name
         for key, uplink in state.uplinks.items()
     )

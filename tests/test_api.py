@@ -133,13 +133,38 @@ async def test_session_refused_twice() -> None:
         await _client(session).get_devices()
 
 
-@pytest.mark.parametrize("status", [400, 401, 403])
-async def test_login_rejected(status: int) -> None:
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (401, None),
+        (403, {"code": "AUTHENTICATION_FAILED_INVALID_CREDENTIALS", "message": "Invalid"}),
+        (403, {"code": "AUTHENTICATION_FAILED_LIMIT_REACHED"}),
+    ],
+)
+async def test_login_rejected(status: int, body: Any) -> None:
     """A rejected login is an authentication error."""
     session = FakeSession()
-    session.login = [FakeResponse(status)]
+    session.login = [FakeResponse(status, body)]
     with pytest.raises(NetworkAuthError):
         await _client(session).login()
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (403, {"code": "API_ERROR"}),
+        (400, None),
+        (403, ValueError("no json")),
+        (403, ["junk"]),
+    ],
+)
+async def test_login_refused_for_other_reasons(status: int, body: Any) -> None:
+    """A 400 or 403 without the credentials code is a network error, not wrong credentials."""
+    session = FakeSession()
+    session.login = [FakeResponse(status, body, path="/api/auth/login")]
+    with pytest.raises(NetworkError, match="refused") as err:
+        await _client(session).login()
+    assert not isinstance(err.value, NetworkAuthError)
 
 
 async def test_login_errors() -> None:
