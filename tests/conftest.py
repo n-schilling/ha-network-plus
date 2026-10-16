@@ -195,11 +195,13 @@ class FakeConsole:
         if self.listen_error:
             raise self.listen_error
         self.listening.set()
-        if on_connect is not None:
-            on_connect()
-        while (message := await self.messages.get()) is not CLOSE:
-            on_message(message)
-        self.listening.clear()
+        try:
+            if on_connect is not None:
+                on_connect()
+            while (message := await self.messages.get()) is not CLOSE:
+                on_message(message)
+        finally:
+            self.listening.clear()
         if self.close_with_error:
             raise NetworkError("connection dropped")
 

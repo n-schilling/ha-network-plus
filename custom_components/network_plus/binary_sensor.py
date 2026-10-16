@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import NetworkConfigEntry
-from .entity import NetworkPlusEntity, UplinkEntity, add_uplink_entities
+from .entity import NetworkPlusEntity, UplinkEntity, add_dynamic_entities
 from .model import Uplink
 
 # Read-only entities of a coordinator: no limit needed
@@ -26,7 +26,7 @@ async def async_setup_entry(
     def _create(uplink: Uplink) -> list[UplinkOnlineSensor]:
         return [UplinkOnlineSensor(entry, uplink)]
 
-    add_uplink_entities(entry, async_add_entities, _create)
+    add_dynamic_entities(entry, async_add_entities, lambda state: state.uplinks, _create)
 
 
 class UplinkOnlineSensor(UplinkEntity, BinarySensorEntity):

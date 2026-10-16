@@ -272,3 +272,18 @@ def test_detach() -> None:
     session = FakeSession()
     _client(session).detach()
     assert session.detached is True
+
+
+async def test_late_rejection_does_not_log_in_again() -> None:
+    """Two requests whose sessions are both rejected share one renewal."""
+    session = FakeSession()
+    session.login = [FakeResponse(200), FakeResponse(200)]
+    session.gets[DEVICES] = [
+        FakeResponse(401),
+        FakeResponse(401),
+        FakeResponse(200, {"data": []}),
+        FakeResponse(200, {"data": []}),
+    ]
+    client = _client(session)
+    assert await asyncio.gather(client.get_devices(), client.get_devices()) == [[], []]
+    assert [r[0] for r in session.requests].count("POST") == 2

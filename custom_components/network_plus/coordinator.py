@@ -31,6 +31,7 @@ from .model import (
     UplinkEvent,
     detect_address_events,
     detect_events,
+    detect_online_events,
     essentials,
     parse_state,
 )
@@ -90,16 +91,18 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._gateway_raw: dict[str, Any] = {}
         self._lte_raws: dict[str, dict[str, Any]] = {}
         self._clients: list[dict[str, Any]] | None = None
-        # Accepted pushes; a poll that overlapped one keeps the pushed objects
-        self._pushes = 0
+        # Devices pushed since the poll started; the poll keeps their objects,
+        # which are newer than its own snapshot
+        self._pushed_macs: set[str] = set()
         self._event_listeners: list[Callable[[UplinkEvent], None]] = []
-        # Last address seen per (uplink, family), for changes across an outage
+        # Last known status and address per uplink, for changes across a gap
+        self._known_online: dict[str, bool] = {}
         self._known_addresses: dict[tuple[str, str], str] = {}
         # When the active uplink was last seen changing
         self._switch_seen_at: datetime | None = None
 
     async def _async_update_data(self) -> NetworkState:
-        pushes_before = self._pushes
+        self._pushed_macs.clear()
         # The three requests are independent; exceptions come back as values
         results: tuple[Any, Any, Any] = await asyncio.gather(
             self.client.get_devices(),
@@ -129,15 +132,17 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         if gateway is None:
             raise UpdateFailed(translation_domain=DOMAIN, translation_key="gateway_missing")
         self._configs = configs
-        lte_raws = {mac: raw for raw in find_lte_devices(devices) if (mac := _mac(raw))}
-        if self._pushes == pushes_before:
+        # A device pushed while the poll ran keeps its pushed object: it is
+        # newer than the poll's snapshot, which must not turn a seen failover
+        # back. The poll decides which LTE devices exist.
+        pushed = self._pushed_macs
+        if self.mac not in pushed:
             self._gateway_raw = gateway
-            self._lte_raws = lte_raws
-        else:
-            # A push arrived while the poll ran: its objects are newer than
-            # the poll's snapshot, which must not turn a seen failover back
-            for mac, raw in lte_raws.items():
-                self._lte_raws.setdefault(mac, raw)
+        self._lte_raws = {
+            mac: self._lte_raws[mac] if mac in pushed and mac in self._lte_raws else raw
+            for raw in find_lte_devices(devices)
+            if (mac := _mac(raw))
+        }
         state = self._build()
         previous: NetworkState | None = self.data
         if previous is not None and _renamed(previous, state):
@@ -165,12 +170,14 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
     @callback
     def _notify(self, state: NetworkState) -> None:
         """Pass the events between the last known state and ``state`` on."""
-        # The first state only seeds the known addresses
-        events = detect_address_events(self._known_addresses, state)
+        # The first state only seeds the known statuses and addresses
+        online = detect_online_events(self._known_online, state)
+        addresses = detect_address_events(self._known_addresses, state)
+        events = online + addresses
         # None before the first refresh, although the type says otherwise
         previous: NetworkState | None = self.data
         if previous is not None:
-            events = detect_events(previous, state, self._switch_seen_at) + events
+            events = online + detect_events(previous, state, self._switch_seen_at) + addresses
             if any(e.type in (EVENT_FAILOVER, EVENT_RESTORED) for e in events):
                 self._switch_seen_at = dt_util.utcnow()
         for event in events:
@@ -195,16 +202,17 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
                     raw = {**self._gateway_raw, **raw}
                 if "last_wan_status" in raw:
                     self._gateway_raw = raw
+                    self._pushed_macs.add(mac)
                     changed = True
             elif mac in self._lte_raws or is_lte_device(raw):
                 if partial:
                     raw = {**self._lte_raws.get(mac, {}), **raw}
                 if is_lte_device(raw):
                     self._lte_raws[mac] = raw
+                    self._pushed_macs.add(mac)
                     changed = True
         if not changed or not self._gateway_raw:
             return
-        self._pushes += 1
         # The poll decides whether the console is healthy; a push only refines
         # a healthy state, so a failing poll is not hidden behind push data
         if not self.last_update_success:
@@ -221,8 +229,17 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         while True:
             try:
                 await self.client.listen(self.handle_message, self._on_connect)
+            except NetworkAuthError as err:
+                # The poll starts the reauth flow and the entry is reloaded
+                # after it; trying again here would only repeat the rejected login
+                _LOGGER.debug("Websocket login rejected, waiting for reauthentication: %s", err)
+                self.websocket_connected = False
+                return
             except NetworkError as err:
                 _LOGGER.debug("Websocket ended: %s", err)
+            except Exception:
+                # A push the integration cannot handle must not end the listener
+                _LOGGER.exception("Unexpected error while handling a websocket message")
             else:
                 _LOGGER.debug("Websocket closed")
             # A connection that stood is retried soon, however it ended;

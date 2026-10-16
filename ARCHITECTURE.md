@@ -46,9 +46,10 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   failover (the gateway's transition timestamp moved while the active uplink
   stayed the preferred one; a timestamp older than the last seen switch is
   ignored, because it belongs to a failover that was seen).
-  `detect_address_events` compares the public addresses against the last
-  address known per uplink and family, so a change that passes through a
-  state without an address (PPPoE reconnect, outage) still fires.
+  `detect_online_events` and `detect_address_events` compare against the
+  last known status or address per uplink, so a change that passes through
+  an unknown status or a state without an address (PPPoE reconnect, outage)
+  still fires.
 - **Push gate:** the websocket sends the gateway about once a second with
   latency values that differ nearly every time. A push updates the state only
   when `essentials()` changed: an uplink's online state or address, the active
@@ -58,15 +59,24 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - `device:sync` carries whole objects and replaces what is known;
   `device:update` carries only the changed fields (seen live: a single key)
   and is merged into the known object.
-- The poll's three requests run in parallel. A push that arrives while the
-  poll is in flight is newer than the poll's snapshot, so the poll then keeps
-  the pushed objects and takes only configuration and clients; otherwise a
-  snapshot from before a failover would turn it back and fire a false
-  `restored`.
+- The poll's three requests run in parallel. A device pushed while the poll
+  is in flight keeps its pushed object, which is newer than the poll's
+  snapshot; otherwise a snapshot from before a failover would turn it back
+  and fire a false `restored`. Devices not pushed meanwhile take the poll's
+  object, and the poll decides which LTE devices exist.
+- The websocket listener survives anything a push can contain: parsing
+  tolerates Infinity, NaN, timestamps beyond any clock and odd field types,
+  and an unexpected exception is logged, not fatal. A rejected login ends the
+  listener instead of repeating the login; the poll starts the reauth flow and
+  the entry is reloaded after it.
 - Uplink names are part of entity names (translation placeholders). When a
   poll finds an uplink renamed in UniFi Network, the entry is reloaded.
-- Concurrent requests that find the session rejected share one new login
-  (login generation counter).
+- Concurrent requests that find the session rejected share one new login:
+  each request remembers the login generation it was sent with, and a 401
+  only marks the session expired if nobody logged in since.
+- The active-client list is fetched whole every minute (the console offers
+  no filter for remote clients); on a LAN with a few dozen clients that is a
+  few kilobytes.
 - A failed poll makes the entities unavailable (`UpdateFailed`); the next
   poll that succeeds brings them back. Pushes are ignored while the last poll
   failed: the poll decides whether the console is healthy, so a failing poll

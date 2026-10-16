@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import ipaddress
 import logging
+import math
 import re
 from typing import Any
 
@@ -286,26 +287,11 @@ def detect_events(
 
     ``switch_seen_at`` is when the last change of the active uplink was seen;
     a transition timestamp from before that belongs to a failover that was
-    seen and is no brief failover. Address changes are found separately, see
-    ``detect_address_events``.
+    seen and is no brief failover. Uplinks going down or up and address
+    changes are found against the last known values, see
+    ``detect_online_events`` and ``detect_address_events``.
     """
     events: list[UplinkEvent] = []
-    for key, uplink in new.uplinks.items():
-        before = old.uplinks.get(key)
-        if before is None:
-            continue
-        if (
-            before.online is not None
-            and uplink.online is not None
-            and before.online != uplink.online
-        ):
-            events.append(
-                UplinkEvent(
-                    EVENT_UPLINK_UP if uplink.online else EVENT_UPLINK_DOWN,
-                    {"uplink": key, "uplink_name": uplink.name},
-                )
-            )
-
     if old.active is not None and new.active is not None and old.active != new.active:
         events.append(
             UplinkEvent(
@@ -328,6 +314,28 @@ def detect_events(
         # The gateway switched to the backup and back between two states
         # this integration saw, for example while it was not connected.
         events.append(UplinkEvent(EVENT_BRIEF_FAILOVER, {"at": new.last_transition.isoformat()}))
+    return events
+
+
+def detect_online_events(known: dict[str, bool], state: NetworkState) -> list[UplinkEvent]:
+    """Return the uplinks that went down or up against their last known status, and remember it.
+
+    ``known`` maps the uplink key to the last status that was not unknown, so
+    a change through an unknown status in between still fires.
+    """
+    events: list[UplinkEvent] = []
+    for key, uplink in state.uplinks.items():
+        if uplink.online is None:
+            continue
+        previous = known.get(key)
+        if previous is not None and previous != uplink.online:
+            events.append(
+                UplinkEvent(
+                    EVENT_UPLINK_UP if uplink.online else EVENT_UPLINK_DOWN,
+                    {"uplink": key, "uplink_name": uplink.name},
+                )
+            )
+        known[key] = uplink.online
     return events
 
 
@@ -389,9 +397,10 @@ def _availability(stats: dict[str, Any]) -> float | None:
     """
     if (value := _float(stats.get("availability"))) is not None:
         return value
+    entries = stats.get("monitors")
     monitors = [
         v
-        for m in stats.get("monitors") or []
+        for m in (entries if isinstance(entries, list) else [])
         if isinstance(m, dict) and (v := _float(m.get("availability"))) is not None
     ]
     return sum(monitors) / len(monitors) if monitors else None
@@ -480,16 +489,20 @@ def _name(state: NetworkState, key: str) -> str:
 
 def _timestamp_ms(value: Any) -> datetime | None:
     millis = _int(value)
-    if not millis or millis <= 0:
-        return None
-    return datetime.fromtimestamp(millis / 1000, UTC)
+    return _timestamp(millis / 1000) if millis and millis > 0 else None
 
 
 def _timestamp_s(value: Any) -> datetime | None:
     seconds = _int(value)
-    if not seconds or seconds <= 0:
+    return _timestamp(seconds) if seconds and seconds > 0 else None
+
+
+def _timestamp(seconds: float) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(seconds, UTC)
+    except OverflowError, OSError, ValueError:
+        # Far outside what a clock can mean
         return None
-    return datetime.fromtimestamp(seconds, UTC)
 
 
 def _dict(value: Any) -> dict[str, Any]:
@@ -501,7 +514,8 @@ def _int(value: Any) -> int | None:
         return None
     try:
         return int(value)
-    except TypeError, ValueError:
+    except TypeError, ValueError, OverflowError:
+        # Infinity passes json.loads and overflows int()
         return None
 
 
@@ -509,6 +523,7 @@ def _float(value: Any) -> float | None:
     if isinstance(value, bool):
         return None
     try:
-        return float(value)
-    except TypeError, ValueError:
+        result = float(value)
+    except TypeError, ValueError, OverflowError:
         return None
+    return result if math.isfinite(result) else None

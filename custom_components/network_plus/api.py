@@ -88,15 +88,21 @@ class NetworkClient:
             self._logged_in = True
             self._login_generation += 1
 
+    def _session_rejected(self, generation: int) -> None:
+        """Note an expired session, unless another caller renewed it meanwhile."""
+        if self._login_generation == generation:
+            self._logged_in = False
+
     async def _get(self, path: str) -> Any:
         """GET a JSON document; log in first and once more when the session expired."""
         for attempt in range(2):
             if not self._logged_in:
                 await self.login(self._login_generation)
+            generation = self._login_generation
             try:
                 async with self._session.get(f"{self._base}{path}", timeout=TIMEOUT) as resp:
                     if resp.status == 401:
-                        self._logged_in = False
+                        self._session_rejected(generation)
                         if attempt == 0:
                             continue
                         raise NetworkAuthError("session not accepted after a new login")
@@ -157,6 +163,7 @@ class NetworkClient:
         """
         if not self._logged_in:
             await self.login(self._login_generation)
+        generation = self._login_generation
         url = f"wss://{self._host}/proxy/network/wss/s/{self._site}/events?clients=v2"
         try:
             async with self._session.ws_connect(url, heartbeat=HEARTBEAT) as ws:
@@ -173,7 +180,7 @@ class NetworkClient:
                         on_message(data)
         except WSServerHandshakeError as err:
             if err.status == 401:
-                self._logged_in = False
+                self._session_rejected(generation)
             raise NetworkError(f"websocket refused (HTTP {err.status})") from err
         except (ClientError, TimeoutError) as err:
             raise NetworkError(_describe(err)) from err

@@ -546,3 +546,87 @@ async def test_unexpected_poll_errors(
     console.error = None
     await _poll(hass, setup_entry)
     assert coordinator.last_update_success is True
+
+
+async def test_poll_refreshes_devices_that_were_not_pushed(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A gateway push during the poll keeps the gateway's object; the LTE device still takes the poll's."""
+    console.devices_gate = asyncio.Event()
+    poll = hass.async_create_task(setup_entry.runtime_data.coordinator.async_refresh())
+    for _ in range(5):
+        await asyncio.sleep(0)
+    console.messages.put_nowait(sync(gateway()))  # the gateway, unchanged, during the poll
+    for _ in range(5):
+        await asyncio.sleep(0)
+    console.devices[2] = lte_device(rx=2_000_000)
+    console.devices_gate.set()
+    await poll
+    await hass.async_block_till_done()
+    assert _state(hass, LTE_PERCENT) == "0.03125"
+
+
+async def test_poll_drops_removed_lte_device(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """An LTE device the console no longer lists makes its entities unavailable."""
+    console.devices = console.devices[:2]
+    await _poll(hass, setup_entry)
+    assert _state(hass, LTE_PERCENT) == STATE_UNAVAILABLE
+
+
+async def test_unexpected_push_does_not_end_the_listener(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A push that raises in a listener is logged; the websocket is connected again."""
+    coordinator = setup_entry.runtime_data.coordinator
+
+    def _broken(_event: Any) -> None:
+        raise RuntimeError("listener broke")
+
+    coordinator.async_add_event_listener(_broken)
+    calls = console.listen_calls
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(_delay: float, *args: Any) -> None:
+        await real_sleep(0)
+
+    with patch("custom_components.network_plus.coordinator.asyncio.sleep", fake_sleep):
+        await console.push(hass, sync(gateway(wan="offline", active="WAN_LTE_FAILOVER")))
+        for _ in range(50):
+            if console.listen_calls > calls:
+                break
+            await real_sleep(0)
+        await console.listening.wait()
+    assert console.listen_calls == calls + 1
+    assert coordinator.websocket_connected is True
+    # Odd values in a push are no error either
+    raw = gateway(wan="offline", active="WAN_LTE_FAILOVER")
+    raw["last_lte_failover_transition_timestamp"] = float("inf")
+    raw["uptime_stats"]["WAN"] = {"monitors": 5}
+    console.messages.put_nowait(sync(raw))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert console.listen_calls == calls + 1
+
+
+async def test_rejected_login_stops_the_listener(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A rejected login ends the websocket loop instead of repeating the login."""
+    coordinator = setup_entry.runtime_data.coordinator
+    calls = console.listen_calls
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(_delay: float, *args: Any) -> None:
+        await real_sleep(0)
+
+    console.listen_error = NetworkAuthError("no")
+    with patch("custom_components.network_plus.coordinator.asyncio.sleep", fake_sleep):
+        console.messages.put_nowait(
+            CLOSE
+        )  # the standing connection ends; the next login is rejected
+        for _ in range(50):
+            await real_sleep(0)
+    assert console.listen_calls == calls + 1  # one rejected attempt, then no more
+    assert coordinator.websocket_connected is False

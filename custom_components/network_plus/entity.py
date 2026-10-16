@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 
 from homeassistant.core import callback
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo, format_mac
@@ -11,7 +11,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import NetworkConfigEntry, NetworkCoordinator
-from .model import Gateway, LteBackup, Uplink
+from .model import Gateway, LteBackup, NetworkState, Uplink
 
 
 def gateway_device_info(gateway: Gateway, name: str) -> DeviceInfo:
@@ -98,44 +98,26 @@ class LteEntity(CoordinatorEntity[NetworkCoordinator]):
 
 
 @callback
-def add_uplink_entities(
+def add_dynamic_entities[T](
     entry: NetworkConfigEntry,
     add_entities: Callable[[Iterable[Entity]], None],
-    create: Callable[[Uplink], Iterable[Entity]],
+    items: Callable[[NetworkState], Mapping[str, T]],
+    create: Callable[[T], Iterable[Entity]],
 ) -> None:
-    """Add the entities of every uplink, also of uplinks that appear later."""
+    """Add entities for every item of ``items(state)``, also for items that appear later.
+
+    Used for the uplinks (by network group) and the LTE devices (by MAC).
+    """
     coordinator = entry.runtime_data.coordinator
     known: set[str] = set()
 
     @callback
     def _add_new() -> None:
-        new = [u for k, u in coordinator.data.uplinks.items() if k not in known]
+        new = [(key, item) for key, item in items(coordinator.data).items() if key not in known]
         if not new:
             return
-        known.update(u.key for u in new)
-        add_entities([entity for uplink in new for entity in create(uplink)])
-
-    _add_new()
-    entry.async_on_unload(coordinator.async_add_listener(_add_new))
-
-
-@callback
-def add_lte_entities(
-    entry: NetworkConfigEntry,
-    add_entities: Callable[[Iterable[Entity]], None],
-    create: Callable[[LteBackup], Iterable[Entity]],
-) -> None:
-    """Add the entities of every LTE backup device, also of devices that appear later."""
-    coordinator = entry.runtime_data.coordinator
-    known: set[str] = set()
-
-    @callback
-    def _add_new() -> None:
-        new = [lte for mac, lte in (coordinator.data.lte or {}).items() if mac not in known]
-        if not new:
-            return
-        known.update(lte.mac for lte in new)
-        add_entities([entity for lte in new for entity in create(lte)])
+        known.update(key for key, _ in new)
+        add_entities([entity for _, item in new for entity in create(item)])
 
     _add_new()
     entry.async_on_unload(coordinator.async_add_listener(_add_new))

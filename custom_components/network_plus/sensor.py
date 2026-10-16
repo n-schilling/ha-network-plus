@@ -17,13 +17,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import NetworkConfigEntry
-from .entity import (
-    LteEntity,
-    NetworkPlusEntity,
-    UplinkEntity,
-    add_lte_entities,
-    add_uplink_entities,
-)
+from .entity import LteEntity, NetworkPlusEntity, UplinkEntity, add_dynamic_entities
 from .model import LteBackup, Uplink
 
 # Read-only entities of a coordinator: no limit needed
@@ -65,8 +59,8 @@ async def async_setup_entry(
             LteSignalSensor(entry, lte),
         ]
 
-    add_uplink_entities(entry, async_add_entities, _uplink)
-    add_lte_entities(entry, async_add_entities, _lte)
+    add_dynamic_entities(entry, async_add_entities, lambda state: state.uplinks, _uplink)
+    add_dynamic_entities(entry, async_add_entities, lambda state: state.lte or {}, _lte)
 
 
 class ActiveUplinkSensor(NetworkPlusEntity, SensorEntity):

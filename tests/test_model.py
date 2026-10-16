@@ -14,6 +14,7 @@ from custom_components.network_plus.model import (
     VpnClient,
     detect_address_events,
     detect_events,
+    detect_online_events,
     essentials,
     parse_clients,
     parse_lte,
@@ -94,6 +95,22 @@ def test_active_falls_back_to_first_online() -> None:
     assert state.backup_active is None
 
 
+def test_values_beyond_any_clock_or_number() -> None:
+    """Infinity, NaN, huge timestamps and odd monitor fields give None, not an error."""
+    raw = gateway()
+    raw["last_lte_failover_transition_timestamp"] = float("inf")
+    raw["uptime_stats"]["WAN"] = {"latency_average": float("nan"), "monitors": 5}
+    raw["uplink"]["xput_down"] = float("inf")
+    raw["uplink"]["speedtest_lastrun"] = 10**20
+    state = parse_state(raw, wan_configs())
+    assert state.last_transition is None
+    wan = state.uplinks["WAN"]
+    assert (wan.latency, wan.availability) == (None, None)
+    assert state.speedtest is not None
+    assert (state.speedtest.download, state.speedtest.last_run) == (None, None)
+    assert parse_lte(lte_device(rx=float("inf"))).usage_bytes is None  # type: ignore[arg-type]
+
+
 def test_missing_and_odd_fields() -> None:
     """Missing or malformed fields give None instead of an error."""
     raw = {
@@ -128,16 +145,30 @@ def test_events_failover_and_restore() -> None:
         wan_configs(),
     )
     events = detect_events(normal, backup)
-    assert [e.type for e in events] == [EVENT_UPLINK_DOWN, EVENT_FAILOVER]
-    assert events[0].attributes == {"uplink": "WAN", "uplink_name": "Cable"}
-    assert events[1].attributes == {
+    assert [e.type for e in events] == [EVENT_FAILOVER]
+    assert events[0].attributes == {
         "from_uplink": "WAN",
         "from_uplink_name": "Cable",
         "to_uplink": "WAN_LTE_FAILOVER",
         "to_uplink_name": "LTE",
     }
     back = parse_state(gateway(transition=TRANSITION + 2000), wan_configs())
-    assert [e.type for e in detect_events(backup, back)] == [EVENT_UPLINK_UP, EVENT_RESTORED]
+    assert [e.type for e in detect_events(backup, back)] == [EVENT_RESTORED]
+
+
+def test_online_events_through_unknown() -> None:
+    """Down and up are found against the last known status, also through an unknown one."""
+    known: dict[str, bool] = {}
+    assert detect_online_events(known, parse_state(gateway(), wan_configs())) == []
+    assert known == {"WAN": True, "WAN_LTE_FAILOVER": True}
+    assert detect_online_events(known, parse_state(gateway(wan="degraded"), wan_configs())) == []
+    assert known["WAN"] is True
+    events = detect_online_events(known, parse_state(gateway(wan="offline"), wan_configs()))
+    assert [e.type for e in events] == [EVENT_UPLINK_DOWN]
+    assert events[0].attributes == {"uplink": "WAN", "uplink_name": "Cable"}
+    assert detect_online_events(known, parse_state(gateway(wan="offline"), wan_configs())) == []
+    events = detect_online_events(known, parse_state(gateway(), wan_configs()))
+    assert [e.type for e in events] == [EVENT_UPLINK_UP]
 
 
 def test_brief_failover() -> None:
