@@ -96,6 +96,16 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - Concurrent requests that find the session rejected share one new login:
   each request remembers the login generation it was sent with, and a 401
   only marks the session expired if nobody logged in since.
+- **Session lifetime:** the console's session token (cookie `TOKEN`, a JWT)
+  lives exactly two hours (seen live); afterwards every request answers
+  401 and the client logs in again. The login clears the old cookie first,
+  so the console judges the credentials and not a stale token. A rejected
+  login asks for the password only after `AUTH_FAILURES_FOR_REAUTH` (3)
+  polls in a row: live, one poll two hours after a restart was rejected
+  although the password had not changed, and a reauthentication flow needs
+  a person. The console's lockout after too many attempts
+  (`AUTHENTICATION_FAILED_LIMIT_REACHED`) is a temporary error, not wrong
+  credentials.
 - The active-client list is fetched whole every minute (the console offers
   no filter for remote clients); on a LAN with a few dozen clients that is a
   few kilobytes.

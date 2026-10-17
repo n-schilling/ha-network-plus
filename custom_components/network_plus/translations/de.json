@@ -192,7 +192,10 @@
   },
   "exceptions": {
     "invalid_auth": {
-      "message": "Die Konsole hat die Anmeldung abgelehnt."
+      "message": "Die Konsole hat die Anmeldung abgelehnt ({error})."
+    },
+    "login_rejected": {
+      "message": "Die Konsole hat die Anmeldung abgelehnt ({error}); wiederholt sich das, wird nach dem Passwort gefragt."
     },
     "update_failed": {
       "message": "Das Gateway konnte nicht gelesen werden: {error}"

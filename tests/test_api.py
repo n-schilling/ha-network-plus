@@ -56,6 +56,18 @@ class FakeWebSocket:
             yield MagicMock(type=kind, data=data)
 
 
+class FakeCookieJar:
+    """Holds cookie names and records what was cleared."""
+
+    def __init__(self) -> None:
+        self.names = {"TOKEN", "other"}
+        self.cleared = 0
+
+    def clear(self, predicate: Any) -> None:
+        self.cleared += 1
+        self.names = {name for name in self.names if not predicate(MagicMock(key=name))}
+
+
 class FakeSession:
     """Answers requests from queues; records what was asked."""
 
@@ -68,6 +80,7 @@ class FakeSession:
         self.requests: list[tuple[str, str]] = []
         self.ws_urls: list[str] = []
         self.detached = False
+        self.cookie_jar = FakeCookieJar()
 
     def detach(self) -> None:
         self.detached = True
@@ -150,7 +163,7 @@ async def test_session_refused_twice() -> None:
     [
         (401, None),
         (403, {"code": "AUTHENTICATION_FAILED_INVALID_CREDENTIALS", "message": "Invalid"}),
-        (403, {"code": "AUTHENTICATION_FAILED_LIMIT_REACHED"}),
+        (403, {"code": "AUTHENTICATION_FAILED_ACCOUNT_LOCKED"}),
     ],
 )
 async def test_login_rejected(status: int, body: Any) -> None:
@@ -159,6 +172,24 @@ async def test_login_rejected(status: int, body: Any) -> None:
     session.login = [FakeResponse(status, body)]
     with pytest.raises(NetworkAuthError):
         await _client(session).login()
+
+
+async def test_login_locked_out_is_no_auth_error() -> None:
+    """Too many attempts lock the console for a while; asking for the password would not help."""
+    session = FakeSession()
+    session.login = [FakeResponse(403, {"code": "AUTHENTICATION_FAILED_LIMIT_REACHED"})]
+    with pytest.raises(NetworkError, match="for now") as err:
+        await _client(session).login()
+    assert not isinstance(err.value, NetworkAuthError)
+
+
+async def test_login_drops_the_old_token() -> None:
+    """The session cookie from before is cleared, so the login carries no expired token."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    await _client(session).login()
+    assert session.cookie_jar.cleared == 1
+    assert session.cookie_jar.names == {"other"}
 
 
 @pytest.mark.parametrize(

@@ -72,6 +72,10 @@ MAX_EXPECTED_SPEED: Final = 100_000
 # Consecutive failed polls after which a repair issue says the console is unreachable
 UNREACHABLE_POLLS: Final = 15
 
+# Consecutive polls with a rejected login before the password is asked for: a
+# console in maintenance or a session edge case rejects a login once in a while
+AUTH_FAILURES_FOR_REAUTH: Final = 3
+
 # Repair issues
 ISSUE_UNREACHABLE: Final = "console_unreachable"
 ISSUE_LTE_LIMIT: Final = "lte_limit_disabled"

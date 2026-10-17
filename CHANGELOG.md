@@ -2,6 +2,14 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] - 2026-10-17
+
+### Fixed
+
+- A single rejected login no longer asks for the password: the console's session token lives two hours, and a login that is rejected once (an expired session, maintenance) is retried; the reauthentication starts after three rejected polls in a row. The reason is in the log and in the message.
+- A login carries no old session cookie, so the console judges the credentials, not a stale token.
+- The console's lockout after too many login attempts is treated as a temporary error, not as wrong credentials.
+
 ## [0.6.0] - 2026-10-16
 
 ### Added

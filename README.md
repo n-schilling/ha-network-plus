@@ -378,6 +378,7 @@ Three things need a hand and get a repair issue under Settings → Repairs; each
 
 - **"The console does not answer"**: check the address, and whether the console has a self-signed certificate (then turn the certificate check off).
 - **"The console rejected the username or the password"**: the user must be a local user of the console, not a UI.com account.
+- **Home Assistant asks for the password although it did not change**: the console rejected the login three polls in a row. The log says why (`login rejected (401)`, a code of the console, or `session not accepted after a new login`). A single rejection, for example when the console's two-hour session expires during maintenance, is retried without asking.
 - **Entities unavailable**: the console was not reachable at the last read; look at Settings → System → Logs for `network_plus`.
 - The diagnostics (⋮ on the integration's page → Download diagnostics) hold no address, user, password, MAC, uplink names or times and can be attached to an issue.
 

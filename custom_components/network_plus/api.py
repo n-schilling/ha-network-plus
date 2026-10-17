@@ -29,6 +29,10 @@ TIMEOUT = ClientTimeout(total=15)
 HEARTBEAT = 30
 # The console protects writes with a token it hands out at login and with answers
 CSRF_HEADER = "x-csrf-token"
+# The session cookie; its token lives two hours (seen live), then the console answers 401
+TOKEN_COOKIE = "TOKEN"
+# The console's answer to too many login attempts: a lockout, not wrong credentials
+LOGIN_LIMIT_REACHED = "AUTHENTICATION_FAILED_LIMIT_REACHED"
 # The permission a user needs to change the network configuration
 NETWORK_ADMIN = ("network.management", "admin")
 
@@ -84,6 +88,9 @@ class NetworkClient:
         async with self._login_lock:
             if seen_generation is not None and seen_generation != self._login_generation:
                 return
+            # A login carries no old token: the session's cookie expires after two
+            # hours, and the console must judge the credentials, not a stale cookie
+            self._session.cookie_jar.clear(lambda cookie: cookie.key == TOKEN_COOKIE)
             try:
                 async with self._session.post(
                     f"{self._base}/api/auth/login",
@@ -95,6 +102,10 @@ class NetworkClient:
                         # error code; 400 and 403 without it mean something else,
                         # for example a console that is still starting
                         code = await _error_code(resp)
+                        if code == LOGIN_LIMIT_REACHED:
+                            # Too many attempts: the console refuses for a while, whatever
+                            # the password; asking for it would not help
+                            raise NetworkError(f"login refused for now ({code})")
                         if resp.status == 401 or code.startswith("AUTHENTICATION_FAILED"):
                             raise NetworkAuthError(f"login rejected ({code or resp.status})")
                         detail = f" {code}" if code else ""

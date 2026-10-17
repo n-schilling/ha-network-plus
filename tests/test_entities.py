@@ -196,9 +196,22 @@ async def test_auth_failure_starts_reauth(
     hass: HomeAssistant,
     setup_entry: MockConfigEntry,
     console: FakeConsole,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """A rejected login asks for the password."""
-    console.error = NetworkAuthError("no")
+    """A rejected login asks for the password only when it repeats three polls in a row."""
+    console.error = NetworkAuthError("login rejected (401)")
+    await _poll(hass, setup_entry)
+    assert _state(hass, ACTIVE) == STATE_UNAVAILABLE
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
+    assert "rejected the login (login rejected (401))" in caplog.text
+    # A login that works in between starts the count afresh
+    console.error = None
+    await _poll(hass, setup_entry)
+    assert _state(hass, ACTIVE) == "wan"
+    console.error = NetworkAuthError("login rejected (401)")
+    await _poll(hass, setup_entry)
+    await _poll(hass, setup_entry)
+    assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
     await _poll(hass, setup_entry)
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert [f["context"]["source"] for f in flows] == ["reauth"]
@@ -580,8 +593,11 @@ async def test_clients_not_readable(
     assert _state(hass, VPN) == STATE_UNKNOWN
     assert hass.states.get(VPN).attributes["clients"] == []  # type: ignore[union-attr]
     assert _state(hass, WAN) == "on"
+    # A rejected login on the clients endpoint counts like any other
     console.clients_error = NetworkAuthError("no")
-    await _poll(hass, setup_entry)
+    for _ in range(3):
+        assert hass.config_entries.flow.async_progress_by_handler(DOMAIN) == []
+        await _poll(hass, setup_entry)
     flows = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
     assert [f["context"]["source"] for f in flows] == ["reauth"]
 

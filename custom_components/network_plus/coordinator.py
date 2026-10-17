@@ -32,6 +32,7 @@ from .api import (
     is_lte_device,
 )
 from .const import (
+    AUTH_FAILURES_FOR_REAUTH,
     CONF_AUTO_OFF_MINUTES,
     CONF_DRILL,
     CONF_ENFORCED_AT,
@@ -161,6 +162,8 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self.backup_speedtest: asyncio.Task[None] | None = None
         # Consecutive failed polls, for the repair issue "console unreachable"
         self._failed_polls = 0
+        # Consecutive polls with a rejected login, before the password is asked for
+        self._auth_failures = 0
         # LTE devices whose data limit is turned off (repair issue per device)
         self._lte_limit_issues: set[str] = set()
 
@@ -182,6 +185,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         if self._failed_polls:
             self._failed_polls = 0
             self._delete_issue(ISSUE_UNREACHABLE)
+        self._auth_failures = 0
         self._check_lte_limits(state)
         return state
 
@@ -196,12 +200,12 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         )
         for result in results[:2]:
             if isinstance(result, BaseException):
-                raise _poll_error(result)
+                raise self._poll_error(result)
         devices: list[dict[str, Any]] = results[0]
         configs: list[dict[str, Any]] = results[1]
         clients = results[2]
         if isinstance(clients, NetworkAuthError):
-            raise _poll_error(clients)
+            raise self._poll_error(clients)
         if isinstance(clients, NetworkError):
             # A console without this endpoint still reports its uplinks;
             # the remote clients are unknown then.
@@ -757,6 +761,40 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._received = True
         self.handle_message(message)
 
+    def _poll_error(self, err: BaseException) -> BaseException:
+        """Return what a failed request means for the coordinator.
+
+        A rejected login asks for the password only when it repeats: the
+        console rejects a login once in a while (maintenance, a session
+        edge case), and the reauthentication flow needs a person.
+        """
+        if isinstance(err, NetworkAuthError):
+            self._auth_failures += 1
+            if self._auth_failures >= AUTH_FAILURES_FOR_REAUTH:
+                return ConfigEntryAuthFailed(
+                    translation_domain=DOMAIN,
+                    translation_key="invalid_auth",
+                    translation_placeholders={"error": str(err)},
+                )
+            _LOGGER.warning(
+                "The console rejected the login (%s); the password is asked for after %d"
+                " rejections in a row",
+                err,
+                AUTH_FAILURES_FOR_REAUTH,
+            )
+            return UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="login_rejected",
+                translation_placeholders={"error": str(err)},
+            )
+        if isinstance(err, NetworkError):
+            return UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="update_failed",
+                translation_placeholders={"error": str(err)},
+            )
+        return err
+
 
 def _speedtest_uplink_from(data: Any) -> tuple[datetime, str] | None:
     """Return the stored (run time, uplink key) of the last speed test; None if unreadable."""
@@ -767,19 +805,6 @@ def _speedtest_uplink_from(data: Any) -> tuple[datetime, str] | None:
     except ValueError:
         return None
     return (last_run, data["uplink"])
-
-
-def _poll_error(err: BaseException) -> BaseException:
-    """Return what a failed request means for the coordinator."""
-    if isinstance(err, NetworkAuthError):
-        return ConfigEntryAuthFailed(translation_domain=DOMAIN, translation_key="invalid_auth")
-    if isinstance(err, NetworkError):
-        return UpdateFailed(
-            translation_domain=DOMAIN,
-            translation_key="update_failed",
-            translation_placeholders={"error": str(err)},
-        )
-    return err
 
 
 def _renamed(previous: NetworkState, state: NetworkState, configs: list[dict[str, Any]]) -> bool:
