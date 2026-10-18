@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta, tzinfo
 import logging
 from typing import Any
 
@@ -37,9 +37,11 @@ from .const import (
     CONF_DRILL,
     CONF_ENFORCED_AT,
     CONF_ENFORCED_WAN_TYPE,
+    CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
     CONF_SPEEDTEST_UPLINK,
     DEFAULT_AUTO_OFF_MINUTES,
+    DEFAULT_LTE_BILLING_DAY,
     DEFAULT_LTE_LIMIT_PERCENT,
     DOMAIN,
     EVENT_SPEEDTEST,
@@ -48,6 +50,7 @@ from .const import (
     ISSUE_ADMIN,
     ISSUE_LTE_LIMIT,
     ISSUE_UNREACHABLE,
+    LTE_REPORTS_MAX_AGE,
     RECONNECT_MAX,
     RECONNECT_MIN,
     RESULT_TIMEOUT,
@@ -60,10 +63,12 @@ from .model import (
     EVENT_DRILL_COMPLETED,
     SWITCH_TOLERANCE,
     Drill,
+    LteReports,
     NetworkState,
     Speedtest,
     Uplink,
     UplinkEvent,
+    apply_billing,
     brief_failover_candidate,
     detect_active_events,
     detect_address_events,
@@ -71,7 +76,9 @@ from .model import (
     drill_progress,
     essentials,
     lte_usage,
+    month_start,
     normalize_mac,
+    parse_lte_reports,
     parse_state,
 )
 
@@ -166,6 +173,11 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._auth_failures = 0
         # LTE devices whose data limit is turned off (repair issue per device)
         self._lte_limit_issues: set[str] = set()
+        # With a billing day other than the 1st: the console's daily and
+        # monthly LTE reports, and the time zone their days are in
+        self._lte_reports: LteReports | None = None
+        self._console_zone: tzinfo | None = None
+        self._lte_reports_failing = False
 
     async def _async_update_data(self) -> NetworkState:
         try:
@@ -231,6 +243,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             for raw in find_lte_devices(devices)
             if (mac := normalize_mac(raw.get("mac")))
         }
+        await self._async_read_lte_reports()
         state = self._build()
         previous: NetworkState | None = self.data
         if previous is not None and _renamed(previous, state, self._configs):
@@ -238,6 +251,54 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
         self._notify(state)
         return state
+
+    @property
+    def lte_billing_day(self) -> int:
+        """Return the day of the month on which the LTE data plan starts a new period."""
+        return int(self.config_entry.options.get(CONF_LTE_BILLING_DAY, DEFAULT_LTE_BILLING_DAY))
+
+    def _console_now(self) -> datetime:
+        """Return the time in the console's time zone, which its reports' days are in."""
+        return dt_util.now(self._console_zone or dt_util.get_default_time_zone())
+
+    async def _async_read_lte_reports(self) -> None:
+        """Read the LTE reports a billing period needs, once per hour and on a new day.
+
+        A failure leaves the period's usage unknown once the reports are of an
+        earlier day; the rest of the poll is not affected.
+        """
+        if self.lte_billing_day == DEFAULT_LTE_BILLING_DAY or not self._lte_raws:
+            return
+        try:
+            zone = self._console_zone
+            if zone is None:
+                name = await self.client.get_timezone()
+                zone = (dt_util.get_time_zone(name) if name else None) or (
+                    dt_util.get_default_time_zone()
+                )
+                self._console_zone = zone
+            now = dt_util.now(zone)
+            reports = self._lte_reports
+            if (
+                reports is not None
+                and reports.day == now.date()
+                and now - reports.read_at < LTE_REPORTS_MAX_AGE
+            ):
+                return
+            first = month_start(now.date())
+            start = datetime.combine(month_start(first - timedelta(days=1)), time(), zone)
+            macs = list(self._lte_raws)
+            daily, monthly = await asyncio.gather(
+                self.client.get_lte_report("daily", macs, start, now),
+                self.client.get_lte_report("monthly", macs, start, now),
+            )
+        except NetworkError as err:
+            if not self._lte_reports_failing:
+                _LOGGER.warning("LTE reports for the billing period not readable: %s", err)
+                self._lte_reports_failing = True
+            return
+        self._lte_reports_failing = False
+        self._lte_reports = parse_lte_reports(daily, monthly, zone, now)
 
     async def async_set_wan_type(self, key: str, wan_type: str) -> None:
         """Set the WAN type of the uplink ``key`` with the admin credentials, then refresh."""
@@ -340,12 +401,15 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             )
         limit = self.config_entry.options.get(CONF_LTE_LIMIT_PERCENT, DEFAULT_LTE_LIMIT_PERCENT)
         for lte in (data.lte or {}).values():
-            if lte.usage_percent is not None and lte.usage_percent >= limit:
+            # The billing period and the console's calendar month both count:
+            # the console's own data limit goes by the month
+            used = lte.highest_percent
+            if used is not None and used >= limit:
                 raise ServiceValidationError(
                     translation_domain=DOMAIN,
                     translation_key="lte_data_plan_used",
                     translation_placeholders={
-                        "percent": f"{lte.usage_percent:.0f}",
+                        "percent": f"{used:.0f}",
                         "limit": str(limit),
                     },
                 )
@@ -497,6 +561,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         state = parse_state(
             self._gateway_raw, self._configs, list(self._lte_raws.values()), self._clients
         )
+        state = apply_billing(state, self._lte_reports, self._console_now(), self.lte_billing_day)
         return self._place_speedtest(state)
 
     @callback

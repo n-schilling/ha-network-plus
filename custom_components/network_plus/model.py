@@ -10,7 +10,7 @@ LTE device, and they never leave this module.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 import ipaddress
 import logging
 import math
@@ -129,13 +129,41 @@ class LteBackup:
     sim_pin_required: bool | None = None
     sim_pin_verified: bool | None = None
     sim_pin_tries_left: int | None = None
+    # The day the data plan starts a new period; on another day than the 1st
+    # the period's bytes come from the console's daily reports
+    billing_day: int = 1
+    period_bytes: int | None = None  # since the start of the billing period
+    period_start: datetime | None = None
+
+    @property
+    def plan_bytes(self) -> int | None:
+        """Return the bytes the data plan counts: this billing period."""
+        return self.usage_bytes if self.billing_day == 1 else self.period_bytes
 
     @property
     def usage_percent(self) -> float | None:
-        """Return how much of the data plan is used, in percent."""
-        if self.usage_bytes is None or not self.hard_limit or not self.limit_enabled:
+        """Return how much of the data plan is used this billing period, in percent."""
+        return self._percent(self.plan_bytes)
+
+    @property
+    def month_percent(self) -> float | None:
+        """Return how much of the data plan the console counts as used this calendar month.
+
+        The console's own warning and data limits go by this share; they reset
+        on the 1st, whatever the billing day.
+        """
+        return self._percent(self.usage_bytes)
+
+    @property
+    def highest_percent(self) -> float | None:
+        """Return the higher of the billing period's share and the console's monthly share."""
+        values = [v for v in (self.usage_percent, self.month_percent) if v is not None]
+        return max(values) if values else None
+
+    def _percent(self, used: int | None) -> float | None:
+        if used is None or not self.hard_limit or not self.limit_enabled:
             return None
-        return self.usage_bytes / self.hard_limit * 100
+        return used / self.hard_limit * 100
 
     @property
     def sim_problem(self) -> bool | None:
@@ -253,6 +281,132 @@ def lte_usage(state: NetworkState) -> int | None:
     """Return the LTE bytes used this month over all LTE devices; None if none reports."""
     values = [lte.usage_bytes for lte in (state.lte or {}).values() if lte.usage_bytes is not None]
     return sum(values) if values else None
+
+
+@dataclass(frozen=True, slots=True)
+class LteReports:
+    """The console's daily and monthly LTE reports, read on one day of the console.
+
+    Bytes per device (by MAC): per day since the 1st of the previous month,
+    and the previous calendar month as a whole.
+    """
+
+    day: date  # the console's date when the reports were read
+    read_at: datetime
+    daily: dict[str, dict[date, float]]
+    previous_month: dict[str, float]
+
+
+def parse_lte_reports(
+    daily: list[dict[str, Any]],
+    monthly: list[dict[str, Any]],
+    zone: tzinfo,
+    now: datetime,
+) -> LteReports:
+    """Build the reports from the console's rows; ``now`` is in the console's time zone."""
+    first = month_start(now.date())
+    previous = month_start(first - timedelta(days=1))
+    days: dict[str, dict[date, float]] = {}
+    for mac, day, used in _report_rows(daily, zone):
+        per_day = days.setdefault(mac, {})
+        per_day[day] = per_day.get(day, 0.0) + used
+    months: dict[str, float] = {}
+    for mac, day, used in _report_rows(monthly, zone):
+        if day == previous:
+            months[mac] = months.get(mac, 0.0) + used
+    return LteReports(day=now.date(), read_at=now, daily=days, previous_month=months)
+
+
+def _report_rows(rows: list[dict[str, Any]], zone: tzinfo) -> list[tuple[str, date, float]]:
+    """Return MAC, date and LTE bytes of every report row that carries them."""
+    found = []
+    for row in rows:
+        mac = normalize_mac(row.get("ap"))
+        start = _timestamp_ms(row.get("time"))
+        rx, tx = _float(row.get("lte_rxbytes")), _float(row.get("lte_txbytes"))
+        if mac and start is not None and rx is not None and tx is not None:
+            found.append((mac, start.astimezone(zone).date(), rx + tx))
+    return found
+
+
+def month_start(day: date) -> date:
+    """Return the 1st of the month of ``day``."""
+    return day.replace(day=1)
+
+
+def billing_period_start(today: date, billing_day: int) -> date:
+    """Return the first day of the billing period ``today`` belongs to."""
+    if today.day >= billing_day:
+        return today.replace(day=billing_day)
+    previous = month_start(today) - timedelta(days=1)
+    return previous.replace(day=billing_day)
+
+
+def period_usage(
+    month_bytes: int | None,
+    now: datetime,
+    billing_day: int,
+    daily: dict[date, float],
+    previous_month: float | None,
+) -> int | None:
+    """Return the LTE bytes used since the billing period started.
+
+    ``month_bytes`` is the console's counter for the calendar month, exact and
+    current. Only closed days come from the reports: in the month of the
+    period's start, the days before it are subtracted from that month's total.
+    A day missing from the reports is then counted as used, never left out: a
+    warning comes early rather than late.
+    """
+    if month_bytes is None:
+        return None
+    today = now.date()
+    start = billing_period_start(today, billing_day)
+    first = month_start(today)
+    if start >= first:
+        before = sum(used for day, used in daily.items() if first <= day < start)
+        return max(round(month_bytes - before), 0)
+    previous = month_start(start)
+    if previous_month is None:
+        # No total of the previous month: its days since the start are what is known
+        tail = sum(used for day, used in daily.items() if start <= day < first)
+    else:
+        before = sum(used for day, used in daily.items() if previous <= day < start)
+        tail = max(previous_month - before, 0.0)
+        if today == first and now.time() < time(1) and month_bytes >= previous_month:
+            # Just after midnight the console may not have reset its counter
+            # yet: it still holds the previous month, which the tail covers
+            month_bytes = 0
+    return round(month_bytes + tail)
+
+
+def apply_billing(
+    state: NetworkState, reports: LteReports | None, now: datetime, billing_day: int
+) -> NetworkState:
+    """Return the state with the billing period of every LTE device; ``now`` in the console's zone."""
+    if billing_day == 1 or not state.lte:
+        return state
+    start = billing_period_start(now.date(), billing_day)
+    period_start = datetime.combine(start, time(), now.tzinfo)
+    # Reports of an earlier day lack the days closed since; unknown until new ones are read
+    current = reports if reports is not None and reports.day == now.date() else None
+    lte = {
+        mac: replace(
+            device,
+            billing_day=billing_day,
+            period_start=period_start,
+            period_bytes=period_usage(
+                device.usage_bytes,
+                now,
+                billing_day,
+                current.daily.get(mac, {}),
+                current.previous_month.get(mac),
+            )
+            if current is not None
+            else None,
+        )
+        for mac, device in state.lte.items()
+    }
+    return replace(state, lte=lte)
 
 
 @dataclass(frozen=True, slots=True)

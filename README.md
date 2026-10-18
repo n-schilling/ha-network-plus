@@ -51,11 +51,19 @@ If the console has an LTE backup device, it gets a device of its own below the g
 
 | Entity | What it shows |
 |---|---|
-| Sensor "LTE data used" | Share of the data plan used this month, in percent. Unknown while the limit is turned off |
-| Sensor "LTE data this month" | Bytes used this month, as the console counts them; the monthly drop is the reset |
+| Sensor "LTE data used" | Share of the data plan used this month (or billing period, see below), in percent. Unknown while the limit is turned off |
+| Sensor "LTE data this month" | Bytes used this month, as the console counts them; the monthly drop is the reset. With a billing day: the bytes of the billing period |
 | Sensor "LTE data limit" (diagnostic) | The data plan set in UniFi Network; attribute `warning_bytes` is the warning limit. Unknown while the limit is turned off |
 | Sensor "LTE signal" (diagnostic, disabled) | RSSI in dBm; attribute `rsrp` |
 | Binary sensor "SIM problem" | On while the SIM keeps the device from connecting: a PIN the device could not verify, or no PIN tries left (the SIM wants its PUK). Attributes `state` and `pin_tries_left` |
+
+**Billing day.** The console counts LTE data per calendar month and resets on the 1st. If your mobile plan starts a new period on another day, set that day in the options (*LTE data plan: billing day*, 1 to 28). The integration then adds up the console's daily reports: the console's counter for the month, minus the days of the month before the billing day, or, before the billing day, plus the previous month's days since it. Closed days come from the reports, today from the counter, so the value stays current. The reports are read once an hour.
+
+- "LTE data this month" then holds the bytes of the billing period, with the period's start as `last_reset`; the statistics reset on the billing day. The attribute `month_bytes` is the console's own monthly counter.
+- "LTE data used" is the share of the billing period; the attribute `month_percent` is the share the console counts for the calendar month.
+- The console's own warning and data limits keep resetting on the 1st; the integration cannot change that. "Enforce backup uplink" refuses as soon as either share reaches its limit.
+- A day missing from the reports counts as used, so a warning comes early rather than late. If the reports cannot be read (the user needs read access to the statistics), the two sensors are unknown and the log says why.
+- The console keeps the daily reports for 90 days by default, enough for any billing period.
 
 ### Remote clients
 
@@ -350,7 +358,7 @@ Developed against a Dream Machine with UniFi Network 10.
 | Verify the certificate | On by default. Turn it off only if the console uses its own self-signed certificate; the connection stays encrypted. |
 | Use admin features | Off by default. On, a second dialog asks for the admin credentials for the switch "Enforce backup uplink" and the two speed test buttons; see above. |
 
-The entry is named after the gateway. Reconfigure changes the address, the user, the certificate check or the admin opt-in; when the read-only password changes, Home Assistant asks for the new one. The options hold the two limits of "Enforce backup uplink".
+The entry is named after the gateway. Reconfigure changes the address, the user, the certificate check or the admin opt-in; when the read-only password changes, Home Assistant asks for the new one. The options hold the two limits of "Enforce backup uplink", the billing day of the LTE data plan and the expected link speeds.
 
 ## How the data is updated
 

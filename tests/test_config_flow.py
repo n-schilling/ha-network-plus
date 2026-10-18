@@ -15,6 +15,7 @@ from custom_components.network_plus.const import (
     CONF_ADMIN_PASSWORD,
     CONF_ADMIN_USERNAME,
     CONF_AUTO_OFF_MINUTES,
+    CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
     CONF_USE_ADMIN,
     DOMAIN,
@@ -208,14 +209,30 @@ async def test_reconfigure_toggles_admin(
 
 
 async def test_options(hass: HomeAssistant, setup_admin_entry: MockConfigEntry) -> None:
-    """The auto-off time and the LTE limit are options."""
+    """The auto-off time, the LTE limit and the billing day are options."""
     result = await hass.config_entries.options.async_init(setup_admin_entry.entry_id)
     assert result["type"] is FlowResultType.FORM
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONF_AUTO_OFF_MINUTES: 30, CONF_LTE_LIMIT_PERCENT: 50}
+        result["flow_id"],
+        {CONF_AUTO_OFF_MINUTES: 30, CONF_LTE_LIMIT_PERCENT: 50, CONF_LTE_BILLING_DAY: 15},
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert setup_admin_entry.options == {CONF_AUTO_OFF_MINUTES: 30, CONF_LTE_LIMIT_PERCENT: 50}
+    assert setup_admin_entry.options == {
+        CONF_AUTO_OFF_MINUTES: 30,
+        CONF_LTE_LIMIT_PERCENT: 50,
+        CONF_LTE_BILLING_DAY: 15,
+    }
+
+
+async def test_options_billing_day_defaults_to_the_first(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry
+) -> None:
+    """Without a billing day the calendar month counts, as the console does."""
+    result = await hass.config_entries.options.async_init(setup_admin_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_AUTO_OFF_MINUTES: 15, CONF_LTE_LIMIT_PERCENT: 80}
+    )
+    assert setup_admin_entry.options[CONF_LTE_BILLING_DAY] == 1
 
 
 async def test_options_expected_link_speed(
@@ -250,4 +267,4 @@ async def test_options_without_loaded_entry(
     await hass.async_block_till_done()
     result = await hass.config_entries.options.async_init(setup_admin_entry.entry_id)
     fields = {str(key) for key in result["data_schema"].schema}
-    assert fields == {CONF_AUTO_OFF_MINUTES, CONF_LTE_LIMIT_PERCENT}
+    assert fields == {CONF_AUTO_OFF_MINUTES, CONF_LTE_LIMIT_PERCENT, CONF_LTE_BILLING_DAY}

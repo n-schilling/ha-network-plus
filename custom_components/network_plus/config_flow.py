@@ -31,14 +31,17 @@ from .const import (
     CONF_ADMIN_PASSWORD,
     CONF_ADMIN_USERNAME,
     CONF_AUTO_OFF_MINUTES,
+    CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
     CONF_USE_ADMIN,
     DEFAULT_AUTO_OFF_MINUTES,
+    DEFAULT_LTE_BILLING_DAY,
     DEFAULT_LTE_LIMIT_PERCENT,
     DOMAIN,
     EXPECTED_SPEED_OPTIONS,
     MAX_AUTO_OFF_MINUTES,
     MAX_EXPECTED_SPEED,
+    MAX_LTE_BILLING_DAY,
     MAX_LTE_LIMIT_PERCENT,
     MIN_AUTO_OFF_MINUTES,
     MIN_LTE_LIMIT_PERCENT,
@@ -284,6 +287,7 @@ class OptionsFlowHandler(OptionsFlowWithReload):
             data: dict[str, Any] = {
                 CONF_AUTO_OFF_MINUTES: int(user_input[CONF_AUTO_OFF_MINUTES]),
                 CONF_LTE_LIMIT_PERCENT: int(user_input[CONF_LTE_LIMIT_PERCENT]),
+                CONF_LTE_BILLING_DAY: int(user_input[CONF_LTE_BILLING_DAY]),
             }
             for option in EXPECTED_SPEED_OPTIONS.values():
                 # 0 or empty: no expectation, the sensor goes
@@ -330,6 +334,17 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                         step=1,
                         mode=NumberSelectorMode.BOX,
                         unit_of_measurement="%",
+                    )
+                ),
+                probatio.Required(
+                    CONF_LTE_BILLING_DAY,
+                    default=options.get(CONF_LTE_BILLING_DAY, DEFAULT_LTE_BILLING_DAY),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=DEFAULT_LTE_BILLING_DAY,
+                        max=MAX_LTE_BILLING_DAY,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
                     )
                 ),
             }

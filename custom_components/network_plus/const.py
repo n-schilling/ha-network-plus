@@ -38,6 +38,16 @@ DEFAULT_LTE_LIMIT_PERCENT: Final = 80
 MIN_LTE_LIMIT_PERCENT: Final = 1
 MAX_LTE_LIMIT_PERCENT: Final = 100
 
+# Option: the day of the month on which the mobile plan starts a new data
+# period. On the 1st the console's monthly counter fits; on another day the
+# integration adds up the console's daily reports.
+CONF_LTE_BILLING_DAY: Final = "lte_billing_day"
+DEFAULT_LTE_BILLING_DAY: Final = 1
+MAX_LTE_BILLING_DAY: Final = 28
+# How long the daily reports are taken as read: closed days do not change,
+# but the console rolls up the last hours of a day a while after midnight
+LTE_REPORTS_MAX_AGE: Final = timedelta(hours=1)
+
 # The WAN type the console uses for an uplink that is switched off
 WAN_TYPE_DISABLED: Final = "disabled"
 # The WAN type to restore when none was recorded (a console freshly set up)

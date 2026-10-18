@@ -47,6 +47,8 @@ LTE_FIELDS = (
     "sim_pin_required",
     "sim_pin_verified",
     "sim_pin_tries_left",
+    "billing_day",
+    "period_bytes",
 )
 
 

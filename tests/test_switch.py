@@ -35,6 +35,7 @@ from custom_components.network_plus.const import (
     CONF_DRILL,
     CONF_ENFORCED_AT,
     CONF_ENFORCED_WAN_TYPE,
+    CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
     DOMAIN,
 )
@@ -173,6 +174,22 @@ async def test_refuses_near_the_data_plan_limit(
     await hass.async_block_till_done()
     await _turn(hass, SERVICE_TURN_ON)
     assert console.writes == [("net-wan", "disabled")]
+
+
+async def test_refuses_by_the_higher_lte_count(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """With a billing day the console's calendar month counts too: its own limit goes by it."""
+    console.devices[2] = lte_device(rx=6_500_000_000, tx=0)  # 81 % of 8 GB this month
+    console.report_error = NetworkError("not readable")  # the billing period stays unknown
+    hass.config_entries.async_update_entry(
+        setup_admin_entry, options={CONF_LTE_BILLING_DAY: 15, CONF_AUTO_OFF_MINUTES: 15}
+    )
+    await hass.async_block_till_done()
+    await _poll(hass, setup_admin_entry)
+    with pytest.raises(ServiceValidationError, match="81 %"):
+        await _turn(hass, SERVICE_TURN_ON)
+    assert console.writes == []
 
 
 @pytest.mark.parametrize(

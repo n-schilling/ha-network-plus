@@ -56,6 +56,8 @@ async def test_diagnostics_hold_nothing_personal(
             "sim_pin_required": True,
             "sim_pin_verified": True,
             "sim_pin_tries_left": 3,
+            "billing_day": 1,
+            "period_bytes": None,
         }
     ]
     assert result["vpn_clients"] == 1

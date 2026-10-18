@@ -27,6 +27,8 @@ published API. Every request goes through `NetworkClient._request` in
 | `GET …/v2/api/site/<site>/wan/enriched-configuration` | Names and failover priorities of the uplinks | Every 60 s |
 | `GET …/v2/api/site/<site>/clients/active?includeTeleport=true` | Remote clients (Teleport, VPN) | Every 60 s |
 | `wss://…/wss/s/<site>/events?clients=v2` | `device:sync` messages with the same runtime objects, about once a second | Continuous |
+| `GET …/stat/sysinfo` | The console's time zone (`timezone`), which the days of its reports are in. Falls back to Home Assistant's | Once, with a billing day |
+| `POST …/stat/report/{daily,monthly}.ap` `{"attrs": ["lte_rxbytes", "lte_txbytes", "time"], "macs": [...], "start", "end"}` | The LTE bytes per day and per month, for a billing day other than the 1st. Rows carry `ap` (MAC) and `time` (ms, midnight in the console's time zone); bytes are floats. Retention by default: daily 90 days, monthly a year (`data_retention_time_in_hours_for_*` in `stat/sysinfo`) | Hourly and on a new day, with a billing day |
 | `GET /api/users/self` | Whether the admin user may change the Network configuration (`permissions["network.management"]` holds `admin`) | Config flow |
 | `GET` + `PUT …/rest/networkconf/<id>` | The switch "Enforce backup uplink": read the uplink network, write it back with `wan_type` `disabled` or the previous type. Needs the CSRF token the console hands out at login and with answers | On switching |
 | `POST …/cmd/devmgr` `{"mac": <gateway>, "cmd": "speedtest"}` | The button "Run speed test". The console answers at once with `meta.rc`; progress and result arrive in the gateway's runtime object. (`"cmd": "speedtest-status"` returns the same `speedtest-status` block on demand; not needed with the push.) | On pressing |
@@ -35,6 +37,8 @@ The LTE data usage is `rx_bytes + tx_bytes` of the LTE device's runtime object.
 On the console this was developed against, that sum equals the sum of the
 daily values of the console's monthly report to the byte, also across a
 reboot of the device, so it is the usage in the current calendar month.
+The monthly report's row equals the counter as well, and today's daily row
+is rolled up within minutes.
 
 ## Data flow
 
@@ -294,7 +298,22 @@ do not share them, and `async_remove_entry` drops them with the entry.
   it leaves the active uplink unknown rather than reporting a false failover.
 - **LTE usage** is the console's monthly counter, reported with state class
   `total_increasing`: the statistics take the console's monthly drop as the
-  reset, whatever its time zone or billing day. The share of the data plan is
+  reset, whatever its time zone.
+- **Billing day** (option, 2 to 28): the period's usage is the console's
+  counter minus the reported days of the month before the billing day, or,
+  before the billing day, the counter plus the previous month's total minus
+  its days before the billing day (`model.period_usage`). Only closed days
+  come from the reports, today from the counter. Subtracting the days that do
+  not count, instead of adding the ones that do, makes a missing day count as
+  used: a warning comes early, never late. Without the previous month's total
+  its reported days since the billing day are added instead. Within the first
+  hour of the 1st a counter that is still at least last month's total has not
+  been reset yet and is not added twice. The sensor then has state class
+  `total` with the period's start (midnight in the console's time zone) as
+  `last_reset`, so a value that drops a little within the period (a report
+  rolled up late) is a correction, not a reset. Reports of an earlier day give
+  unknown, not a guess. The console's own limits still reset on the 1st, so
+  the switch refuses by the higher of the two shares. The share of the data plan is
   unknown while the limit is turned off in UniFi Network, even if the console
   keeps the old limit value.
 - **Diagnostics** hold no address, user, password, MAC, uplink or client name

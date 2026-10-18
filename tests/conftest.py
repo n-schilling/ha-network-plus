@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Generator
 import copy
+from datetime import datetime
 from typing import Any
 from unittest.mock import patch
 
@@ -204,6 +205,17 @@ def lte_device(
     }
 
 
+def lte_report_row(day: datetime, used: float, mac: str = LTE_MAC) -> dict[str, Any]:
+    """Return a report row of the LTE device for the interval that starts at ``day``."""
+    return {
+        "ap": mac,
+        "o": "ap",
+        "time": int(day.timestamp() * 1000),
+        "lte_rxbytes": used * 0.9,
+        "lte_txbytes": used * 0.1,
+    }
+
+
 def teleport_client(name: str = "Phone", since: int = 1_700_000_000) -> dict[str, Any]:
     """Return a connected Teleport client as the console lists it."""
     return {"type": "TELEPORT", "display_name": name, "assoc_time": since, "status": "online"}
@@ -246,6 +258,11 @@ class FakeConsole:
         self.listening = asyncio.Event()
         self.listen_calls = 0
         self.created_with: list[tuple[str, str, str]] = []
+        # The LTE reports a billing day other than the 1st needs, by interval
+        self.timezone: str | None = "Europe/Berlin"
+        self.reports: dict[str, list[dict[str, Any]]] = {"daily": [], "monthly": []}
+        self.report_error: Exception | None = None
+        self.report_calls: list[tuple[str, datetime, datetime]] = []
 
     def set_gateway(self, raw: dict[str, Any]) -> None:
         """Replace the gateway's runtime object."""
@@ -274,6 +291,19 @@ class FakeConsole:
 
     def detach(self) -> None:
         self.detached += 1
+
+    async def get_timezone(self) -> str | None:
+        if self.report_error:
+            raise self.report_error
+        return self.timezone
+
+    async def get_lte_report(
+        self, interval: str, macs: list[str], start: datetime, end: datetime
+    ) -> list[dict[str, Any]]:
+        if self.report_error:
+            raise self.report_error
+        self.report_calls.append((interval, start, end))
+        return [r for r in copy.deepcopy(self.reports[interval]) if r.get("ap") in macs]
 
     async def can_manage_network(self) -> bool:
         if self.admin_error:

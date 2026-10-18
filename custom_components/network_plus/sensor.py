@@ -434,7 +434,12 @@ class DrillDataSensor(NetworkPlusEntity, SensorEntity):
 
 
 class LteUsagePercentSensor(LteEntity, SensorEntity):
-    """How much of the LTE data plan is used this month."""
+    """How much of the LTE data plan is used this billing period.
+
+    With a billing day other than the 1st, the attribute ``month_percent``
+    is the share the console counts for the calendar month, which its own
+    warning and data limits go by.
+    """
 
     _attr_native_unit_of_measurement = PERCENTAGE
     _attr_state_class = SensorStateClass.MEASUREMENT
@@ -451,13 +456,26 @@ class LteUsagePercentSensor(LteEntity, SensorEntity):
         lte = self.lte
         return lte.usage_percent if lte else None
 
+    @property
+    def extra_state_attributes(self) -> dict[str, float | None] | None:
+        """Return the console's share of the calendar month, with a billing day only."""
+        if self.coordinator.lte_billing_day == 1:
+            return None
+        lte = self.lte
+        return {"month_percent": lte.month_percent if lte else None}
+
 
 class LteUsageSensor(LteEntity, SensorEntity):
-    """LTE data used this month.
+    """LTE data used this billing period.
 
-    The console resets the counter at its own month boundary; with
-    ``TOTAL_INCREASING`` the statistics take that drop as the reset instead
-    of a guessed ``last_reset``.
+    With the billing day on the 1st this is the console's monthly counter. The
+    console resets it at its own month boundary; with ``TOTAL_INCREASING`` the
+    statistics take that drop as the reset instead of a guessed ``last_reset``.
+
+    With another billing day the integration sums the period up from the
+    console's reports and knows when it started: ``TOTAL`` with the period's
+    start as ``last_reset``. A value that drops a little within the period
+    (a report the console rolled up late) is then a correction, not a reset.
     """
 
     _attr_device_class = SensorDeviceClass.DATA_SIZE
@@ -470,12 +488,29 @@ class LteUsageSensor(LteEntity, SensorEntity):
     def __init__(self, entry: NetworkConfigEntry, lte: LteBackup) -> None:
         """Initialize the sensor."""
         super().__init__(entry, lte, "usage")
+        self._billing_period = entry.runtime_data.coordinator.lte_billing_day != 1
+        if self._billing_period:
+            self._attr_state_class = SensorStateClass.TOTAL
 
     @property
     def native_value(self) -> int | None:
         """Return the bytes used."""
         lte = self.lte
-        return lte.usage_bytes if lte else None
+        return lte.plan_bytes if lte else None
+
+    @property
+    def last_reset(self) -> datetime | None:
+        """Return when the billing period started; with a billing day only."""
+        lte = self.lte
+        return lte.period_start if lte and self._billing_period else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, int | None] | None:
+        """Return the console's monthly counter, with a billing day only."""
+        if not self._billing_period:
+            return None
+        lte = self.lte
+        return {"month_bytes": lte.usage_bytes if lte else None}
 
 
 class LteLimitSensor(LteEntity, SensorEntity):

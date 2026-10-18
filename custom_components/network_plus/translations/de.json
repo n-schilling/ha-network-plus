@@ -240,6 +240,7 @@
         "data": {
           "auto_off_minutes": "Backup-Leitung erzwingen: automatisch zurückschalten nach",
           "lte_limit_percent": "Backup-Leitung erzwingen: verweigern ab LTE-Verbrauch von",
+          "lte_billing_day": "LTE-Datenplan: Abrechnungstag",
           "expected_speed_wan": "Erwartete Link-Geschwindigkeit von WAN 1",
           "expected_speed_wan2": "Erwartete Link-Geschwindigkeit von WAN 2",
           "expected_speed_wan3": "Erwartete Link-Geschwindigkeit von WAN 3",
@@ -248,6 +249,7 @@
         "data_description": {
           "auto_off_minutes": "Minuten, nach denen die bevorzugte Leitung von selbst wieder eingeschaltet wird. Beim Test liefen rund 60 MB pro Minute über LTE.",
           "lte_limit_percent": "Prozent des LTE-Datenplans, ab denen der Schalter das Einschalten verweigert.",
+          "lte_billing_day": "Tag im Monat, an dem der Mobilfunktarif einen neuen Datenzeitraum beginnt. 1: der Monatszähler der Konsole. Ein anderer Tag: die Integration addiert die Tagesberichte der Konsole ab diesem Tag. Warn- und Datenlimit der Konsole setzen weiter am 1. zurück; der Schalter verweigert, sobald einer der beiden Werte seine Grenze erreicht.",
           "expected_speed_wan": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",
           "expected_speed_wan2": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",
           "expected_speed_wan3": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",

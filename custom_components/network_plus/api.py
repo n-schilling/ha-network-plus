@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import datetime
 import json
 from typing import Any
 
@@ -187,6 +188,39 @@ class NetworkClient:
         if not isinstance(body, list):
             raise NetworkError("clients/active: unexpected answer")
         return [c for c in body if isinstance(c, dict)]
+
+    async def get_timezone(self) -> str | None:
+        """Return the console's time zone, for example "Europe/Berlin"; None if not set."""
+        body = await self._get(f"/proxy/network/api/s/{self._site}/stat/sysinfo")
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            raise NetworkError("stat/sysinfo: unexpected answer")
+        return str(data[0].get("timezone") or "") or None
+
+    async def get_lte_report(
+        self, interval: str, macs: list[str], start: datetime, end: datetime
+    ) -> list[dict[str, Any]]:
+        """Return the LTE traffic of the devices with ``macs`` per ``interval`` (daily, monthly).
+
+        Every row carries the device's MAC (``ap``), the start of its interval
+        in ms (``time``, midnight in the console's time zone) and the bytes
+        received and sent over LTE in it. The console keeps daily rows for 90
+        days and monthly rows for a year by default.
+        """
+        body = await self._request(
+            "POST",
+            f"/proxy/network/api/s/{self._site}/stat/report/{interval}.ap",
+            {
+                "attrs": ["lte_rxbytes", "lte_txbytes", "time"],
+                "macs": macs,
+                "start": int(start.timestamp() * 1000),
+                "end": int(end.timestamp() * 1000),
+            },
+        )
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list):
+            raise NetworkError(f"stat/report/{interval}.ap: unexpected answer")
+        return [row for row in data if isinstance(row, dict)]
 
     async def can_manage_network(self) -> bool:
         """Return whether the user may change the network configuration."""

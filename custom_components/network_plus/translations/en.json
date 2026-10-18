@@ -240,6 +240,7 @@
         "data": {
           "auto_off_minutes": "Enforce backup uplink: switch back after",
           "lte_limit_percent": "Enforce backup uplink: refuse from an LTE usage of",
+          "lte_billing_day": "LTE data plan: billing day",
           "expected_speed_wan": "Expected link speed of WAN 1",
           "expected_speed_wan2": "Expected link speed of WAN 2",
           "expected_speed_wan3": "Expected link speed of WAN 3",
@@ -248,6 +249,7 @@
         "data_description": {
           "auto_off_minutes": "Minutes after which the preferred uplink is switched on again by itself. In a test, about 60 MB per minute ran over LTE.",
           "lte_limit_percent": "Percent of the LTE data plan from which the switch refuses to switch on.",
+          "lte_billing_day": "Day of the month on which the mobile plan starts a new data period. 1: the console's monthly counter. Another day: the integration adds up the console's daily reports from that day on. The console's own warning and data limits still reset on the 1st; the switch refuses as soon as either count reaches its limit.",
           "expected_speed_wan": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",
           "expected_speed_wan2": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",
           "expected_speed_wan3": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",

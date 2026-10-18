@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -13,8 +15,11 @@ from custom_components.network_plus.model import (
     EVENT_UPLINK_DOWN,
     EVENT_UPLINK_UP,
     Drill,
+    LteReports,
     UplinkEvent,
     VpnClient,
+    apply_billing,
+    billing_period_start,
     brief_failover_candidate,
     detect_active_events,
     detect_address_events,
@@ -25,7 +30,9 @@ from custom_components.network_plus.model import (
     normalize_mac,
     parse_clients,
     parse_lte,
+    parse_lte_reports,
     parse_state,
+    period_usage,
 )
 
 from .conftest import (
@@ -638,3 +645,124 @@ def test_lte_usage_over_all_devices() -> None:
     raw = lte_device()
     del raw["rx_bytes"]
     assert lte_usage(parse_state(gateway(), wan_configs(), [raw])) is None
+
+
+ZONE = ZoneInfo("Europe/Berlin")
+
+
+def _at(day: date, hour: int = 12) -> datetime:
+    """Return a time on ``day`` in the console's time zone."""
+    return datetime(day.year, day.month, day.day, hour, tzinfo=ZONE)
+
+
+def _days(first: date, last: date, used: float) -> dict[date, float]:
+    """Return the same usage for every day from ``first`` to ``last``."""
+    return {first + timedelta(days=n): used for n in range((last - first).days + 1)}
+
+
+def test_billing_period_start() -> None:
+    """The period starts on the billing day of this month, or of the previous one before it."""
+    assert billing_period_start(date(2026, 10, 18), 15) == date(2026, 10, 15)
+    assert billing_period_start(date(2026, 10, 15), 15) == date(2026, 10, 15)
+    assert billing_period_start(date(2026, 10, 14), 15) == date(2026, 9, 15)
+    assert billing_period_start(date(2026, 1, 3), 28) == date(2025, 12, 28)
+
+
+def test_period_usage_within_the_month() -> None:
+    """Once the billing day has passed, the month's days before it come off the counter."""
+    daily = _days(date(2026, 10, 1), date(2026, 10, 18), 100.0)
+    # 14 days before the 15th; today's running bytes come from the counter
+    assert period_usage(2_000, _at(date(2026, 10, 18)), 15, daily, None) == 600
+    # The counter never goes below zero, whatever the reports say
+    assert period_usage(1_000, _at(date(2026, 10, 18)), 15, daily, None) == 0
+    assert period_usage(None, _at(date(2026, 10, 18)), 15, daily, None) is None
+
+
+def test_period_usage_across_the_month() -> None:
+    """Before the billing day, the previous month since the billing day adds to the counter."""
+    daily = _days(date(2026, 9, 1), date(2026, 10, 3), 10.0)
+    now = _at(date(2026, 10, 3))
+    # September: 3_000 in all, 14 days before the 15th
+    assert period_usage(500, now, 15, daily, 3_000.0) == 500 + 3_000 - 140
+    # Without the month's total, its days since the billing day count: 16 days
+    assert period_usage(500, now, 15, daily, None) == 500 + 160
+
+
+def test_period_usage_counts_a_missing_day_as_used() -> None:
+    """A gap in the reports before the billing day raises the usage, never lowers it."""
+    daily = _days(date(2026, 9, 1), date(2026, 9, 30), 10.0)
+    del daily[date(2026, 9, 3)]
+    now = _at(date(2026, 10, 3))
+    assert period_usage(500, now, 15, daily, 3_000.0) == 500 + 3_000 - 130
+    # A total smaller than its days (a late roll-up) gives no negative tail
+    assert period_usage(500, now, 15, daily, 50.0) == 500
+
+
+def test_period_usage_before_the_console_resets() -> None:
+    """Right after midnight on the 1st, a counter that still holds last month is not added twice."""
+    daily = _days(date(2026, 9, 1), date(2026, 9, 30), 10.0)
+    first = date(2026, 10, 1)
+    assert period_usage(3_000, _at(first, 0), 15, daily, 3_000.0) == 3_000 - 140
+    # Reset: the new month's bytes add to the previous month's tail
+    assert period_usage(20, _at(first, 0), 15, daily, 3_000.0) == 20 + 3_000 - 140
+    # Later on the 1st the counter belongs to the new month, however high
+    assert period_usage(3_000, _at(first, 1), 15, daily, 3_000.0) == 3_000 + 3_000 - 140
+
+
+def test_parse_lte_reports() -> None:
+    """Rows become bytes per device and day in the console's time zone; odd rows are left out."""
+    now = _at(date(2026, 10, 18))
+
+    def row(day: date, rx: object, tx: object = 0.5, mac: str = LTE_MAC.upper()) -> dict:
+        midnight = datetime(day.year, day.month, day.day, tzinfo=ZONE)
+        return {
+            "ap": mac,
+            "time": int(midnight.timestamp() * 1000),
+            "lte_rxbytes": rx,
+            "lte_txbytes": tx,
+        }
+
+    daily = [
+        row(date(2026, 9, 30), 10.0),
+        row(date(2026, 10, 1), 20.0),
+        row(date(2026, 10, 1), 1.0),  # the same day twice adds up
+        row(date(2026, 10, 2), "junk"),
+        {"ap": LTE_MAC, "lte_rxbytes": 1, "lte_txbytes": 1},
+    ]
+    monthly = [row(date(2026, 9, 1), 900.0), row(date(2026, 10, 1), 50.0)]
+    reports = parse_lte_reports(daily, monthly, ZONE, now)
+    assert reports.day == date(2026, 10, 18)
+    # Midnight in Berlin is the evening before in UTC; the day is the console's
+    assert reports.daily == {LTE_MAC: {date(2026, 9, 30): 10.5, date(2026, 10, 1): 22.0}}
+    assert reports.previous_month == {LTE_MAC: 900.5}
+
+
+def test_apply_billing() -> None:
+    """The billing period's bytes and start go to every LTE device; old reports give unknown."""
+    state = parse_state(gateway(), wan_configs(), [lte_device(rx=1_000_000_000, tx=0)])
+    now = _at(date(2026, 10, 18))
+    reports = LteReports(
+        day=now.date(),
+        read_at=now,
+        daily={LTE_MAC: _days(date(2026, 10, 1), date(2026, 10, 14), 50_000_000.0)},
+        previous_month={},
+    )
+    assert apply_billing(state, reports, now, 1) is state
+    lte = apply_billing(state, reports, now, 15).lte[LTE_MAC]  # type: ignore[index]
+    assert (lte.billing_day, lte.period_bytes) == (15, 300_000_000)
+    assert lte.period_start == datetime(2026, 10, 15, tzinfo=ZONE)
+    assert lte.plan_bytes == 300_000_000
+    assert lte.usage_percent == 3.75
+    assert lte.month_percent == 12.5
+    assert lte.highest_percent == 12.5
+    stale = replace(reports, day=date(2026, 10, 17))
+    lte = apply_billing(state, stale, now, 15).lte[LTE_MAC]  # type: ignore[index]
+    assert (lte.period_bytes, lte.usage_percent, lte.highest_percent) == (None, None, 12.5)
+    assert apply_billing(state, None, now, 15).lte[LTE_MAC].period_bytes is None  # type: ignore[index]
+    no_lte = parse_state(gateway(), wan_configs(), [])
+    assert apply_billing(no_lte, reports, now, 15) is no_lte
+
+
+def test_highest_percent_without_a_limit() -> None:
+    """Without a data plan limit there is no share at all."""
+    assert parse_lte(lte_device(limit=False)).highest_percent is None

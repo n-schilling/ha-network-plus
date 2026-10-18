@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
@@ -18,7 +19,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.network_plus.api import NetworkAuthError, NetworkError
-from custom_components.network_plus.const import CONF_SPEEDTEST_UPLINK, DOMAIN
+from custom_components.network_plus.const import CONF_LTE_BILLING_DAY, CONF_SPEEDTEST_UPLINK, DOMAIN
 
 from .conftest import (
     CLOSE,
@@ -31,6 +32,7 @@ from .conftest import (
     FakeConsole,
     gateway,
     lte_device,
+    lte_report_row,
     sync,
 )
 
@@ -361,6 +363,8 @@ async def test_lte_sensors_and_device(hass: HomeAssistant, setup_entry: MockConf
     assert lte is not None and gateway_device is not None
     assert lte.via_device_id == gateway_device.id
     assert (lte.name, lte.model, lte.sw_version) == ("LTE backup", "ULTEPRO", "6.0.0")
+    # With the billing day on the 1st no report is read
+    assert setup_entry.runtime_data.coordinator.lte_billing_day == 1
 
 
 async def test_enabled_address_and_signal_sensors(
@@ -915,3 +919,117 @@ async def test_sim_problem_sensor(
     assert _state(hass, SIM) == "on"
     await console.push(hass, sync(lte_device(pin_required=None, pin_verified=None, pin_tries=None)))
     assert _state(hass, SIM) == STATE_UNKNOWN
+
+
+BERLIN = ZoneInfo("Europe/Berlin")
+
+
+async def _setup_billing(
+    hass: HomeAssistant,
+    console: FakeConsole,
+    config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Set up with the billing day on the 15th, on 18 October at noon in the console's zone.
+
+    The console counted 1 GB this month, 50 MB on each of the 14 days before
+    the 15th: the billing period holds 300 MB.
+    """
+    freezer.move_to(datetime(2026, 10, 18, 12, tzinfo=BERLIN))
+    console.devices[2] = lte_device(rx=1_000_000_000, tx=0)
+    console.reports["daily"] = [
+        lte_report_row(datetime(2026, 10, day, tzinfo=BERLIN), 50_000_000) for day in range(1, 19)
+    ]
+    console.reports["monthly"] = [
+        lte_report_row(datetime(2026, 9, 1, tzinfo=BERLIN), 2_000_000_000),
+        lte_report_row(datetime(2026, 10, 1, tzinfo=BERLIN), 1_000_000_000),
+    ]
+    config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(config_entry, options={CONF_LTE_BILLING_DAY: 15})
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_lte_billing_period(
+    hass: HomeAssistant,
+    console: FakeConsole,
+    config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """With a billing day the sensors count the billing period, reset on its start."""
+    await _setup_billing(hass, console, config_entry, freezer)
+    usage = hass.states.get(LTE_USAGE)
+    assert usage.state == "0.3"  # type: ignore[union-attr]
+    assert usage.attributes["state_class"] == "total"  # type: ignore[union-attr]
+    assert usage.attributes["last_reset"] == "2026-10-15T00:00:00+02:00"  # type: ignore[union-attr]
+    assert usage.attributes["month_bytes"] == 1_000_000_000  # type: ignore[union-attr]
+    percent = hass.states.get(LTE_PERCENT)
+    assert percent.state == "3.75"  # type: ignore[union-attr]
+    assert percent.attributes["month_percent"] == 12.5  # type: ignore[union-attr]
+    # Reports since the 1st of the previous month, in the console's time zone
+    assert [(kind, start) for kind, start, _ in console.report_calls] == [
+        ("daily", datetime(2026, 9, 1, tzinfo=BERLIN)),
+        ("monthly", datetime(2026, 9, 1, tzinfo=BERLIN)),
+    ]
+
+
+async def test_lte_reports_read_hourly(
+    hass: HomeAssistant,
+    console: FakeConsole,
+    config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """The reports are read again after an hour and on a new day, not on every poll."""
+    await _setup_billing(hass, console, config_entry, freezer)
+    entry = config_entry
+    freezer.tick(timedelta(minutes=30))
+    await _poll(hass, entry)
+    assert len(console.report_calls) == 2
+    freezer.tick(timedelta(minutes=31))
+    await _poll(hass, entry)
+    assert len(console.report_calls) == 4
+    # Before the billing day the previous month's tail adds to the counter
+    freezer.move_to(datetime(2026, 11, 3, 12, tzinfo=BERLIN))
+    console.devices[2] = lte_device(rx=100_000_000, tx=0)
+    await _poll(hass, entry)
+    assert len(console.report_calls) == 6
+    # 1 GB in October, 700 MB of it before the 15th: 300 MB plus 100 MB in November
+    assert _state(hass, LTE_USAGE) == "0.4"
+
+
+async def test_lte_reports_not_readable(
+    hass: HomeAssistant,
+    console: FakeConsole,
+    config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Without reports the billing period is unknown; the warning comes once, the rest stays."""
+    console.report_error = NetworkError("HTTP 403")
+    await _setup_billing(hass, console, config_entry, freezer)
+    assert _state(hass, LTE_USAGE) == STATE_UNKNOWN
+    assert _state(hass, LTE_PERCENT) == STATE_UNKNOWN
+    assert _state(hass, LATENCY) == "14"
+    await _poll(hass, config_entry)
+    assert caplog.text.count("LTE reports for the billing period not readable") == 1
+    console.report_error = None
+    await _poll(hass, config_entry)
+    assert _state(hass, LTE_USAGE) == "0.3"
+    # Reports of the day keep counting while a later read fails
+    console.report_error = NetworkError("boom")
+    freezer.tick(timedelta(hours=2))
+    await _poll(hass, config_entry)
+    assert _state(hass, LTE_USAGE) == "0.3"
+
+
+async def test_lte_billing_without_console_time_zone(
+    hass: HomeAssistant,
+    console: FakeConsole,
+    config_entry: MockConfigEntry,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A console without a time zone has its days in Home Assistant's."""
+    await hass.config.async_set_time_zone("Europe/Berlin")
+    console.timezone = None
+    await _setup_billing(hass, console, config_entry, freezer)
+    assert _state(hass, LTE_USAGE) == "0.3"

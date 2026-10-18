@@ -2,6 +2,12 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-10-18
+
+### Added
+
+- Option "LTE data plan: billing day" (1 to 28, default 1) for mobile plans that start a new data period on another day than the 1st ([#2](https://github.com/n-schilling/ha-network-plus/issues/2)). With another day, "LTE data this month" and "LTE data used" count the billing period, summed up from the console's daily reports; the usage sensor gets state class `total` with the period's start as `last_reset`, and the attributes `month_bytes` and `month_percent` keep the console's calendar-month count. The console's own limits still reset on the 1st, so "Enforce backup uplink" refuses as soon as either share reaches its limit. With the default nothing changes.
+
 ## [0.6.1] - 2026-10-17
 
 ### Fixed

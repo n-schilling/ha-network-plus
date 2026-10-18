@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 import json
 from typing import Any
 from unittest.mock import MagicMock
@@ -22,7 +23,7 @@ from custom_components.network_plus.api import (
     is_lte_device,
 )
 
-from .conftest import HOST, MAC, gateway, lte_device
+from .conftest import HOST, LTE_MAC, MAC, gateway, lte_device
 
 
 class FakeResponse:
@@ -446,3 +447,49 @@ async def test_start_speedtest() -> None:
         await client.start_speedtest(MAC)
     with pytest.raises(NetworkPermissionError):
         await client.start_speedtest(MAC)
+
+
+SYSINFO = "/proxy/network/api/s/default/stat/sysinfo"
+DAILY = "/proxy/network/api/s/default/stat/report/daily.ap"
+
+
+async def test_get_timezone() -> None:
+    """The console's time zone comes from its system info; none set is None."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    session.gets[SYSINFO] = [
+        FakeResponse(200, {"data": [{"timezone": "Europe/Berlin"}]}),
+        FakeResponse(200, {"data": [{"timezone": ""}]}),
+        FakeResponse(200, {"data": []}),
+    ]
+    client = _client(session)
+    assert await client.get_timezone() == "Europe/Berlin"
+    assert await client.get_timezone() is None
+    with pytest.raises(NetworkError, match="unexpected answer"):
+        await client.get_timezone()
+
+
+async def test_get_lte_report() -> None:
+    """The report is asked for the LTE bytes of the devices, in ms, with the CSRF token."""
+    session = FakeSession()
+    session.login = [FakeResponse(200, headers={"x-csrf-token": "tok-3"})]
+    row = {"ap": LTE_MAC, "time": 1_790_805_600_000, "lte_rxbytes": 10.5, "lte_txbytes": 2.0}
+    session.puts[DAILY] = [
+        FakeResponse(200, {"meta": {"rc": "ok"}, "data": [row, "junk"]}),
+        FakeResponse(200, {"meta": {"rc": "ok"}}),
+    ]
+    client = _client(session)
+    start = datetime(2026, 9, 1, tzinfo=UTC)
+    end = datetime(2026, 10, 18, 12, tzinfo=UTC)
+    assert await client.get_lte_report("daily", [LTE_MAC], start, end) == [row]
+    method, url, body, headers = session.writes[0]
+    assert (method, url.endswith(DAILY)) == ("POST", True)
+    assert body == {
+        "attrs": ["lte_rxbytes", "lte_txbytes", "time"],
+        "macs": [LTE_MAC],
+        "start": 1_788_220_800_000,
+        "end": 1_792_324_800_000,
+    }
+    assert headers["x-csrf-token"] == "tok-3"
+    with pytest.raises(NetworkError, match="unexpected answer"):
+        await client.get_lte_report("daily", [LTE_MAC], start, end)
