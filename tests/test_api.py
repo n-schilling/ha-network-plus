@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from http.cookies import SimpleCookie
 import json
 from typing import Any
 from unittest.mock import MagicMock
@@ -27,15 +28,28 @@ from .conftest import HOST, LTE_MAC, MAC, gateway, lte_device
 
 
 class FakeResponse:
-    """An aiohttp response with a status, a JSON body and headers."""
+    """An aiohttp response with a status, a JSON body, headers and cookies."""
 
     def __init__(
-        self, status: int, body: Any = None, path: str = "/", headers: dict[str, str] | None = None
+        self,
+        status: int,
+        body: Any = None,
+        path: str = "/",
+        headers: dict[str, str] | None = None,
+        cookies: dict[str, str] | None = None,
+        gate: asyncio.Event | None = None,
     ) -> None:
         self.status = status
         self._body = body
         self.url = MagicMock(path=path)
         self.headers = headers or {}
+        self.cookies: SimpleCookie | None = None
+        if cookies is not None:
+            self.cookies = SimpleCookie()
+            for name, value in cookies.items():
+                self.cookies[name] = value
+        # The answer arrives only once the gate is open
+        self.gate = gate
 
     async def json(self, content_type: str | None = None) -> Any:
         if isinstance(self._body, Exception):
@@ -57,18 +71,6 @@ class FakeWebSocket:
             yield MagicMock(type=kind, data=data)
 
 
-class FakeCookieJar:
-    """Holds cookie names and records what was cleared."""
-
-    def __init__(self) -> None:
-        self.names = {"TOKEN", "other"}
-        self.cleared = 0
-
-    def clear(self, predicate: Any) -> None:
-        self.cleared += 1
-        self.names = {name for name in self.names if not predicate(MagicMock(key=name))}
-
-
 class FakeSession:
     """Answers requests from queues; records what was asked."""
 
@@ -81,7 +83,11 @@ class FakeSession:
         self.requests: list[tuple[str, str]] = []
         self.ws_urls: list[str] = []
         self.detached = False
-        self.cookie_jar = FakeCookieJar()
+        # The Cookie header of every request and websocket, in order
+        self.sent_cookies: list[str | None] = []
+        # Opens once a request carries the token of the second login
+        self.renewed = asyncio.Event()
+        self._logins = 0
 
     def detach(self) -> None:
         self.detached = True
@@ -90,6 +96,8 @@ class FakeSession:
     @asynccontextmanager
     async def _answer(item: FakeResponse | Exception) -> AsyncIterator[FakeResponse]:
         await asyncio.sleep(0)  # a real request yields to the loop
+        if isinstance(item, FakeResponse) and item.gate is not None:
+            await item.gate.wait()
         if isinstance(item, Exception):
             raise item
         yield item
@@ -97,13 +105,23 @@ class FakeSession:
     def post(self, url: str, **kwargs: Any) -> Any:
         self.requests.append(("POST", url))
         assert kwargs["json"] == {"username": "user", "password": "pass"}
-        return self._answer(self.login.pop(0))
+        assert "headers" not in kwargs  # a login carries no old token
+        item = self.login.pop(0)
+        if isinstance(item, FakeResponse) and item.status == 200 and item.cookies is None:
+            # The console hands out a new token with every login
+            self._logins += 1
+            item.cookies = SimpleCookie({"TOKEN": f"token-{self._logins}"})
+        return self._answer(item)
 
     def get(self, url: str, **kwargs: Any) -> Any:
         return self.request("GET", url, **kwargs)
 
     def request(self, method: str, url: str, **kwargs: Any) -> Any:
         self.requests.append((method, url))
+        cookie = (kwargs.get("headers") or {}).get("Cookie")
+        self.sent_cookies.append(cookie)
+        if cookie == "TOKEN=token-2":
+            self.renewed.set()
         path = url.removeprefix(f"https://{HOST}")
         if method == "GET":
             return self._answer(self.gets[path].pop(0))
@@ -113,6 +131,7 @@ class FakeSession:
     @asynccontextmanager
     async def ws_connect(self, url: str, **kwargs: Any) -> AsyncIterator[FakeWebSocket]:
         self.ws_urls.append(url)
+        self.sent_cookies.append((kwargs.get("headers") or {}).get("Cookie"))
         if isinstance(self.ws, Exception):
             raise self.ws
         yield self.ws
@@ -148,6 +167,30 @@ async def test_session_expired_logs_in_again() -> None:
     session.gets[DEVICES] = [FakeResponse(401), FakeResponse(200, {"data": []})]
     assert await _client(session).get_devices() == []
     assert [r[0] for r in session.requests] == ["POST", "GET", "POST", "GET"]
+    assert session.sent_cookies == ["TOKEN=token-1", "TOKEN=token-2"]
+
+
+async def test_late_rejection_keeps_the_new_token() -> None:
+    """A 401 that arrives after the new login does not cost the new token.
+
+    The console deletes the token cookie with every 401. When the token
+    expires, the poll's parallel requests come back one by one; the last one
+    arrives after the first already logged in again. With the token in a
+    cookie jar, that answer deleted the fresh token and the poll failed.
+    """
+    session = FakeSession()
+    session.login = [FakeResponse(200), FakeResponse(200)]
+    session.gets[DEVICES] = [FakeResponse(401), FakeResponse(200, {"data": []})]
+    session.gets[WANS] = [
+        FakeResponse(401, gate=session.renewed),
+        FakeResponse(200, []),
+    ]
+    client = _client(session)
+    await client.login()
+    assert await asyncio.gather(client.get_devices(), client.get_wan_configs()) == [[], []]
+    assert [r[0] for r in session.requests].count("POST") == 2
+    # Both repeats carry the token of the second login
+    assert session.sent_cookies[-2:] == ["TOKEN=token-2", "TOKEN=token-2"]
 
 
 async def test_session_refused_twice() -> None:
@@ -184,13 +227,15 @@ async def test_login_locked_out_is_no_auth_error() -> None:
     assert not isinstance(err.value, NetworkAuthError)
 
 
-async def test_login_drops_the_old_token() -> None:
-    """The session cookie from before is cleared, so the login carries no expired token."""
+@pytest.mark.parametrize("cookies", [{}, {"TOKEN": ""}, {"other": "x"}])
+async def test_login_without_token(cookies: dict[str, str]) -> None:
+    """A login answer without a session token is an error, not a session."""
     session = FakeSession()
-    session.login = [FakeResponse(200)]
-    await _client(session).login()
-    assert session.cookie_jar.cleared == 1
-    assert session.cookie_jar.names == {"other"}
+    session.login = [FakeResponse(200, cookies=cookies)]
+    client = _client(session)
+    with pytest.raises(NetworkError, match="no session token") as err:
+        await client.login()
+    assert not isinstance(err.value, NetworkAuthError)
 
 
 @pytest.mark.parametrize(

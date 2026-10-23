@@ -31,6 +31,7 @@ HEARTBEAT = 30
 # The console protects writes with a token it hands out at login and with answers
 CSRF_HEADER = "x-csrf-token"
 # The session cookie; its token lives two hours (seen live), then the console answers 401
+# and deletes the cookie with that answer
 TOKEN_COOKIE = "TOKEN"
 # The console's answer to too many login attempts: a lockout, not wrong credentials
 LOGIN_LIMIT_REACHED = "AUTHENTICATION_FAILED_LIMIT_REACHED"
@@ -64,7 +65,7 @@ class NetworkClient:
         password: str,
         site: str = SITE,
     ) -> None:
-        """Initialize the client; ``session`` needs a cookie jar that accepts IP hosts."""
+        """Initialize the client; ``session`` should keep no cookies, the client sends the token."""
         self._session = session
         self._host = host
         self._username = username
@@ -75,6 +76,9 @@ class NetworkClient:
         # Counts successful logins, so concurrent callers log in only once
         self._login_generation = 0
         self._csrf = ""
+        # Kept here, not in a cookie jar: a request still in flight with the old
+        # token comes back with a 401 that deletes the cookie, also a fresh one
+        self._token = ""
 
     @property
     def _base(self) -> str:
@@ -89,9 +93,6 @@ class NetworkClient:
         async with self._login_lock:
             if seen_generation is not None and seen_generation != self._login_generation:
                 return
-            # A login carries no old token: the session's cookie expires after two
-            # hours, and the console must judge the credentials, not a stale cookie
-            self._session.cookie_jar.clear(lambda cookie: cookie.key == TOKEN_COOKIE)
             try:
                 async with self._session.post(
                     f"{self._base}/api/auth/login",
@@ -112,6 +113,10 @@ class NetworkClient:
                         detail = f" {code}" if code else ""
                         raise NetworkError(f"login refused (HTTP {resp.status}{detail})")
                     _raise_for_status(resp)
+                    cookie = resp.cookies.get(TOKEN_COOKIE)
+                    if cookie is None or not cookie.value:
+                        raise NetworkError("login: no session token in the answer")
+                    self._token = cookie.value
                     self._remember_csrf(resp)
             except (ClientError, TimeoutError) as err:
                 raise NetworkError(_describe(err)) from err
@@ -123,6 +128,9 @@ class NetworkClient:
         if self._login_generation == generation:
             self._logged_in = False
 
+    def _auth_headers(self) -> dict[str, str]:
+        return {"Cookie": f"{TOKEN_COOKIE}={self._token}"}
+
     def _remember_csrf(self, resp: ClientResponse) -> None:
         if token := resp.headers.get(CSRF_HEADER):
             self._csrf = token
@@ -133,7 +141,9 @@ class NetworkClient:
             if not self._logged_in:
                 await self.login(self._login_generation)
             generation = self._login_generation
-            headers = {CSRF_HEADER: self._csrf} if method != "GET" else {}
+            headers = self._auth_headers()
+            if method != "GET":
+                headers[CSRF_HEADER] = self._csrf
             try:
                 async with self._session.request(
                     method, f"{self._base}{path}", json=body, headers=headers, timeout=TIMEOUT
@@ -286,7 +296,9 @@ class NetworkClient:
         generation = self._login_generation
         url = f"wss://{self._host}/proxy/network/wss/s/{self._site}/events?clients=v2"
         try:
-            async with self._session.ws_connect(url, heartbeat=HEARTBEAT) as ws:
+            async with self._session.ws_connect(
+                url, heartbeat=HEARTBEAT, headers=self._auth_headers()
+            ) as ws:
                 if on_connect is not None:
                     on_connect()
                 async for msg in ws:

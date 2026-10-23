@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+from aiohttp import DummyCookieJar
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -18,11 +19,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import dt as dt_util
 
+from custom_components.network_plus import create_client
 from custom_components.network_plus.api import NetworkAuthError, NetworkError
 from custom_components.network_plus.const import CONF_LTE_BILLING_DAY, CONF_SPEEDTEST_UPLINK, DOMAIN
 
 from .conftest import (
     CLOSE,
+    ENTRY_DATA,
     IPV4,
     IPV6,
     LTE_MAC,
@@ -311,6 +314,13 @@ async def test_unload(
     assert setup_entry.state is ConfigEntryState.NOT_LOADED
     assert hass.states.get(WAN).state == STATE_UNAVAILABLE  # type: ignore[union-attr]
     assert console.detached == 1
+
+
+async def test_client_session_keeps_no_cookies(hass: HomeAssistant) -> None:
+    """The client sends the token itself; the console deletes the cookie with every 401."""
+    with patch("custom_components.network_plus.async_create_clientsession") as create_session:
+        create_client(hass, dict(ENTRY_DATA))
+    assert isinstance(create_session.call_args.kwargs["cookie_jar"], DummyCookieJar)
 
 
 async def test_speedtest_latency_and_vpn_sensors(

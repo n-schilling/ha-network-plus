@@ -102,12 +102,15 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   only marks the session expired if nobody logged in since.
 - **Session lifetime:** the console's session token (cookie `TOKEN`, a JWT)
   lives exactly two hours (seen live); afterwards every request answers
-  401 and the client logs in again. The login clears the old cookie first,
-  so the console judges the credentials and not a stale token. A rejected
+  401 and the client logs in again. Every 401 carries a `Set-Cookie` that
+  deletes `TOKEN`; a poll's parallel requests come back one by one, and a
+  late 401 after the new login deleted the fresh token from a cookie jar, so
+  the repeat failed and the poll's entities went unavailable for a minute
+  every two hours. The client therefore keeps the token itself and sends it
+  as a `Cookie` header; a login carries no token. A rejected
   login asks for the password only after `AUTH_FAILURES_FOR_REAUTH` (3)
-  polls in a row: live, one poll two hours after a restart was rejected
-  although the password had not changed, and a reauthentication flow needs
-  a person. The console's lockout after too many attempts
+  polls in a row: a reauthentication flow needs a person, and the console
+  may reject a login once in a while (maintenance). The console's lockout after too many attempts
   (`AUTHENTICATION_FAILED_LIMIT_REACHED`) is a temporary error, not wrong
   credentials.
 - The active-client list is fetched whole every minute (the console offers
@@ -265,8 +268,9 @@ do not share them, and `async_remove_entry` drops them with the entry.
   `aiounifi`; a second requirement on it could conflict, and this integration
   needs only a login, two GETs and the websocket.
 - **Own aiohttp session** via `async_create_clientsession` with
-  `CookieJar(unsafe=True)`: the console's login is a cookie, and consoles are
-  usually addressed by IP, which the default jar rejects. Home Assistant
+  `DummyCookieJar()`: the client sends the session token itself (see
+  above), so the session keeps no cookies; that also works for consoles
+  addressed by IP, which the default jar would reject. Home Assistant
   detaches a session created during entry setup when the entry unloads, also
   after a failed setup; the entry registers the detach as well so it is
   visible, and the config flow detaches its own after each check.

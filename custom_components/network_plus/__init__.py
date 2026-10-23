@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 
-from aiohttp import CookieJar
+from aiohttp import DummyCookieJar
 
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant
@@ -31,12 +31,13 @@ PLATFORMS: list[Platform] = [
 
 
 def create_client(hass: HomeAssistant, data: dict[str, object]) -> NetworkClient:
-    """Return a client with its own session: the console's login is a cookie."""
+    """Return a client with its own session; the client keeps the login token itself."""
     session = async_create_clientsession(
         hass,
         verify_ssl=bool(data.get(CONF_VERIFY_SSL, True)),
-        # Accept the cookie also when the console is addressed by IP
-        cookie_jar=CookieJar(unsafe=True),
+        # The console deletes the token cookie with every 401, also with a late
+        # one after a new login; the client sends the token itself
+        cookie_jar=DummyCookieJar(),
     )
     return NetworkClient(
         session, str(data[CONF_HOST]), str(data[CONF_USERNAME]), str(data[CONF_PASSWORD])

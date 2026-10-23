@@ -2,6 +2,12 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-10-23
+
+### Fixed
+
+- The entities no longer go unavailable for a minute every two hours. When the console's session token expired, a poll's parallel requests were rejected one by one; a rejection that arrived after the new login deleted the fresh token (the console deletes the cookie with every 401), so the repeated request failed as well. The client now keeps the token itself and sends it with every request and the websocket.
+
 ## [0.7.0] - 2026-10-18
 
 ### Added
