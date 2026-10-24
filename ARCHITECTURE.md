@@ -117,7 +117,13 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   no filter for remote clients); on a LAN with a few dozen clients that is a
   few kilobytes.
 - A failed poll makes the entities unavailable (`UpdateFailed`); the next
-  poll that succeeds brings them back. Pushes are ignored while the last poll
+  poll that succeeds brings them back. A server error (`NetworkServerError`,
+  HTTP 5xx; seen live: a 502 of the Network application for a minute at
+  night) keeps the last state instead: the poll is repeated up to
+  `SERVER_ERROR_RETRIES` (5) times, the interval one `SERVER_ERROR_DELAY`
+  (1 min) longer each time, then it fails. Only a healthy poll starts the
+  repeats: while the poll fails, or without a first state, a server error
+  fails at once. Kept polls do not count toward the repair issue. Pushes are ignored while the last poll
   failed: the poll decides whether the console is healthy, so a failing poll
   is not hidden behind push data. A rejected login starts the reauth flow. A
   missing clients endpoint only makes the VPN sensor unknown.

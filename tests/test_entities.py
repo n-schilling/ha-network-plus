@@ -20,8 +20,13 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.network_plus import create_client
-from custom_components.network_plus.api import NetworkAuthError, NetworkError
-from custom_components.network_plus.const import CONF_LTE_BILLING_DAY, CONF_SPEEDTEST_UPLINK, DOMAIN
+from custom_components.network_plus.api import NetworkAuthError, NetworkError, NetworkServerError
+from custom_components.network_plus.const import (
+    CONF_LTE_BILLING_DAY,
+    CONF_SPEEDTEST_UPLINK,
+    DOMAIN,
+    SERVER_ERROR_RETRIES,
+)
 
 from .conftest import (
     CLOSE,
@@ -186,6 +191,48 @@ async def test_poll_failure_and_recovery(
     assert hass.states.get(WAN).state == "on"  # type: ignore[union-attr]
 
 
+async def test_server_error_keeps_the_state(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A server error keeps the last state for five repeats, one minute longer apart each time.
+
+    Pushes still apply meanwhile; after the last repeat the entities are
+    unavailable and the poll runs every minute again.
+    """
+    coordinator = setup_entry.runtime_data.coordinator
+    console.error = NetworkServerError("/proxy/network/api/s/default/stat/device: HTTP 502")
+    for repeat in range(1, SERVER_ERROR_RETRIES + 1):
+        await _poll(hass, setup_entry)
+        assert _state(hass, ACTIVE) == "wan"
+        assert coordinator.update_interval == timedelta(minutes=repeat)
+    assert f"repeat {SERVER_ERROR_RETRIES} of {SERVER_ERROR_RETRIES} in 5 min" in caplog.text
+    await console.push(hass, sync(gateway(wan="offline", active="WAN_LTE_FAILOVER")))
+    assert _state(hass, ACTIVE) == "wan_lte_failover"
+
+    await _poll(hass, setup_entry)
+    assert _state(hass, ACTIVE) == STATE_UNAVAILABLE
+    assert coordinator.update_interval == timedelta(seconds=60)
+    # While the poll fails, another server error is no reason to keep anything
+    await _poll(hass, setup_entry)
+    assert coordinator.update_interval == timedelta(seconds=60)
+
+    # A good poll starts the count afresh
+    console.error = None
+    await _poll(hass, setup_entry)
+    assert _state(hass, ACTIVE) == "wan"
+    console.error = NetworkServerError("HTTP 503")
+    await _poll(hass, setup_entry)
+    assert _state(hass, ACTIVE) == "wan"
+    assert coordinator.update_interval == timedelta(minutes=1)
+    # Another error in between ends the repeats at once
+    console.error = NetworkError("down")
+    await _poll(hass, setup_entry)
+    assert _state(hass, ACTIVE) == STATE_UNAVAILABLE
+
+
 async def test_gateway_missing(
     hass: HomeAssistant,
     setup_entry: MockConfigEntry,
@@ -225,8 +272,8 @@ async def test_auth_failure_starts_reauth(
 async def test_setup_retry(
     hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
 ) -> None:
-    """An unreachable console is retried later."""
-    console.error = NetworkError("down")
+    """An unreachable console is retried later, also one with a server error: no state to keep."""
+    console.error = NetworkServerError("HTTP 502")
     config_entry.add_to_hass(hass)
     await hass.config_entries.async_setup(config_entry.entry_id)
     assert config_entry.state is ConfigEntryState.SETUP_RETRY

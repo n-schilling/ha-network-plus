@@ -2,6 +2,12 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.2] - 2026-10-24
+
+### Changed
+
+- A server error of the console (HTTP 5xx, for example while UniFi Network restarts) no longer makes the entities unavailable at once. The last state is kept and the read repeated up to five times, after 1, 2, 3, 4 and 5 minutes; pushes from the websocket still update the entities meanwhile. Only when the fifth repeat fails do they become unavailable. Seen live: a 502 of the Network application for a minute at night.
+
 ## [0.7.1] - 2026-10-23
 
 ### Fixed

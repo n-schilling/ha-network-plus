@@ -27,6 +27,7 @@ from .api import (
     NetworkClient,
     NetworkError,
     NetworkPermissionError,
+    NetworkServerError,
     find_gateway,
     find_lte_devices,
     is_lte_device,
@@ -54,6 +55,8 @@ from .const import (
     RECONNECT_MAX,
     RECONNECT_MIN,
     RESULT_TIMEOUT,
+    SERVER_ERROR_DELAY,
+    SERVER_ERROR_RETRIES,
     UNREACHABLE_POLLS,
     UPDATE_INTERVAL,
     WAN_TYPE_DISABLED,
@@ -171,6 +174,8 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._failed_polls = 0
         # Consecutive polls with a rejected login, before the password is asked for
         self._auth_failures = 0
+        # Consecutive polls that kept the last state after a server error
+        self._server_errors = 0
         # LTE devices whose data limit is turned off (repair issue per device)
         self._lte_limit_issues: set[str] = set()
         # With a billing day other than the 1st: the console's daily and
@@ -180,8 +185,18 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._lte_reports_failing = False
 
     async def _async_update_data(self) -> NetworkState:
+        self.update_interval = UPDATE_INTERVAL
         try:
-            state = await self._async_fetch()
+            try:
+                state = await self._async_fetch()
+            except NetworkServerError as err:
+                if (
+                    self.data is not None
+                    and self.last_update_success
+                    and self._server_errors < SERVER_ERROR_RETRIES
+                ):
+                    return self._hold_after_server_error(err)
+                raise self._poll_error(err) from err
         except UpdateFailed:
             self._failed_polls += 1
             if self._failed_polls == UNREACHABLE_POLLS:
@@ -198,8 +213,28 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             self._failed_polls = 0
             self._delete_issue(ISSUE_UNREACHABLE)
         self._auth_failures = 0
+        self._server_errors = 0
         self._check_lte_limits(state)
         return state
+
+    def _hold_after_server_error(self, err: NetworkServerError) -> NetworkState:
+        """Keep the last state and poll again later, one minute later each time.
+
+        A console whose application restarts answers with a server error for a
+        minute or two; the entities stay available meanwhile. Pushes still
+        refine the kept state. After the last repeat the poll fails.
+        """
+        self._server_errors += 1
+        self.update_interval = SERVER_ERROR_DELAY * self._server_errors
+        _LOGGER.warning(
+            "The console answered with a server error (%s); the last state is kept,"
+            " repeat %d of %d in %d min",
+            err,
+            self._server_errors,
+            SERVER_ERROR_RETRIES,
+            self.update_interval.total_seconds() // 60,
+        )
+        return self.data
 
     async def _async_fetch(self) -> NetworkState:
         self._pushed_macs.clear()
@@ -211,6 +246,8 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             return_exceptions=True,
         )
         for result in results[:2]:
+            if isinstance(result, NetworkServerError):
+                raise result
             if isinstance(result, BaseException):
                 raise self._poll_error(result)
         devices: list[dict[str, Any]] = results[0]

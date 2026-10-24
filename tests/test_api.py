@@ -19,6 +19,7 @@ from custom_components.network_plus.api import (
     NetworkClient,
     NetworkError,
     NetworkPermissionError,
+    NetworkServerError,
     find_gateway,
     find_lte_devices,
     is_lte_device,
@@ -274,7 +275,8 @@ async def test_get_errors() -> None:
     session = FakeSession()
     session.login = [FakeResponse(200)]
     session.gets[DEVICES] = [
-        FakeResponse(500, path=DEVICES),
+        FakeResponse(502, path=DEVICES),
+        FakeResponse(404, path=DEVICES),
         FakeResponse(200, ValueError("no json")),
         FakeResponse(200, {"data": "x"}),
         FakeResponse(200, []),
@@ -282,8 +284,12 @@ async def test_get_errors() -> None:
     ]
     session.gets[WANS] = [FakeResponse(200, {"data": []})]
     client = _client(session)
-    with pytest.raises(NetworkError, match="HTTP 500"):
+    # A server error has its own type: the poll keeps the last state for a while
+    with pytest.raises(NetworkServerError, match="HTTP 502"):
         await client.get_devices()
+    with pytest.raises(NetworkError, match="HTTP 404") as err:
+        await client.get_devices()
+    assert not isinstance(err.value, NetworkServerError)
     with pytest.raises(NetworkError, match="no JSON"):
         await client.get_devices()
     with pytest.raises(NetworkError, match="unexpected"):

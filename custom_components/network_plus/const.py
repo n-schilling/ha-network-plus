@@ -79,6 +79,13 @@ EXPECTED_SPEED_OPTIONS: Final[dict[str, str]] = {
 }
 MAX_EXPECTED_SPEED: Final = 100_000
 
+# A server error of the console (5xx; seen live: a 502 of the Network
+# application for a minute at night) keeps the last state: the poll is
+# repeated up to SERVER_ERROR_RETRIES times, waiting SERVER_ERROR_DELAY longer
+# each time (1, 2, 3, 4, 5 minutes), before the entities become unavailable
+SERVER_ERROR_RETRIES: Final = 5
+SERVER_ERROR_DELAY: Final = timedelta(minutes=1)
+
 # Consecutive failed polls after which a repair issue says the console is unreachable
 UNREACHABLE_POLLS: Final = 15
 

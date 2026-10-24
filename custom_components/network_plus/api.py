@@ -46,6 +46,10 @@ class NetworkError(Exception):
     """The console could not be reached or answered with an error."""
 
 
+class NetworkServerError(NetworkError):
+    """The console answered with a server error (5xx), for example while an application restarts."""
+
+
 class NetworkAuthError(NetworkError):
     """The console rejected the user name or password."""
 
@@ -356,6 +360,8 @@ def _check_accepted(answer: Any, what: str) -> None:
 
 
 def _raise_for_status(resp: ClientResponse) -> None:
+    if resp.status >= 500:
+        raise NetworkServerError(f"{resp.url.path}: HTTP {resp.status}")
     if resp.status >= 400:
         raise NetworkError(f"{resp.url.path}: HTTP {resp.status}")
 

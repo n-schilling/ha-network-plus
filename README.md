@@ -362,7 +362,7 @@ The entry is named after the gateway. Reconfigure changes the address, the user,
 
 ## How the data is updated
 
-The console's websocket pushes the gateway's state about once a second; the integration applies a push at once when an uplink, the active uplink, an address or the LTE state changed, or a speed test started or finished. Numbers (latency, data usage, remote clients) are read every 60 seconds. If the console cannot be reached, the entities become unavailable until the next successful read.
+The console's websocket pushes the gateway's state about once a second; the integration applies a push at once when an uplink, the active uplink, an address or the LTE state changed, or a speed test started or finished. Numbers (latency, data usage, remote clients) are read every 60 seconds. If the console cannot be reached, the entities become unavailable until the next successful read. A server error of the console (HTTP 5xx, for example while UniFi Network restarts) keeps the last state instead: the read is repeated up to five times, after 1, 2, 3, 4 and 5 minutes, and pushes still update the entities meanwhile; only when the fifth repeat fails do they become unavailable.
 
 ## Repair issues
 
@@ -370,7 +370,7 @@ Three things need a hand and get a repair issue under Settings → Repairs; each
 
 | Issue | When | Gone when |
 |---|---|---|
-| Console not reachable | 15 polls in a row failed (about 15 minutes); the entities are unavailable meanwhile | The next poll succeeds |
+| Console not reachable | 15 polls in a row failed (about 15 minutes; with server errors about 30, the first quarter of an hour keeps the last state); the entities are unavailable meanwhile | The next poll succeeds |
 | LTE data limit turned off | An LTE device has no data limit in UniFi Network, so "LTE data used" stays unknown and the switch cannot refuse near the limit | The limit is turned on |
 | Admin user cannot write | At setup the admin user lacks the admin role or its login is rejected, or the console refused a write of the switch or a button | A later setup finds the user working |
 
@@ -387,7 +387,7 @@ Three things need a hand and get a repair issue under Settings → Repairs; each
 - **"The console does not answer"**: check the address, and whether the console has a self-signed certificate (then turn the certificate check off).
 - **"The console rejected the username or the password"**: the user must be a local user of the console, not a UI.com account.
 - **Home Assistant asks for the password although it did not change**: the console rejected the login three polls in a row. The log says why (`login rejected (401)`, a code of the console, or `session not accepted after a new login`). A single rejection, for example when the console's two-hour session expires during maintenance, is retried without asking.
-- **Entities unavailable**: the console was not reachable at the last read; look at Settings → System → Logs for `network_plus`.
+- **Entities unavailable**: the console was not reachable at the last read; look at Settings → System → Logs for `network_plus`. A warning `answered with a server error … repeat 1 of 5` means the console answered with HTTP 5xx and the last state is kept for now.
 - The diagnostics (⋮ on the integration's page → Download diagnostics) hold no address, user, password, MAC, uplink names or times and can be attached to an issue.
 
 ## Removal
