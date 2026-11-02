@@ -176,8 +176,8 @@ async def test_backup_speedtest_runs_the_whole_sequence(
     assert console.writes == [("net-wan", "disabled"), ("net-wan", "dhcp")]
     assert _state(hass, SWITCH) == STATE_OFF
     assert _in_progress(hass) is False
-    download = hass.states.get("sensor.gateway_speed_test_download")
-    assert (download.state, download.attributes["uplink"]) == ("40.0", "wan_lte_failover")  # type: ignore[union-attr]
+    speedtest = setup_admin_entry.runtime_data.coordinator.data.speedtest
+    assert (speedtest.download, speedtest.uplink) == (40.0, "WAN_LTE_FAILOVER")  # type: ignore[union-attr]
     drill = setup_admin_entry.data[CONF_DRILL]
     assert drill["failover_at"] is not None and drill["ended_at"] is not None
     # Pressing again starts a new one

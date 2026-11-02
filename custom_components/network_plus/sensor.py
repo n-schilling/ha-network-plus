@@ -3,33 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
 from homeassistant.const import (
     PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     EntityCategory,
-    Platform,
-    UnitOfDataRate,
     UnitOfInformation,
     UnitOfTime,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import NetworkConfigEntry
-from .entity import (
-    LteEntity,
-    NetworkPlusEntity,
-    UplinkEntity,
-    add_dynamic_entities,
-    remove_stale_entities,
-)
-from .model import Drill, LteBackup, NetworkState, Uplink
-
-# Sensors of the backup drill; they exist only with the admin opt-in, like the switch
-DRILL_KEYS = ("drill_last", "drill_failover_seconds", "drill_restore_seconds", "drill_data_used")
+from .entity import LteEntity, NetworkPlusEntity, add_dynamic_entities
+from .model import LteBackup
 
 # Read-only entities of a coordinator: no limit needed
 PARALLEL_UPDATES = 0
@@ -40,42 +28,8 @@ async def async_setup_entry(
     entry: NetworkConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Add the sensors."""
-    async_add_entities(
-        [
-            ActiveUplinkSensor(entry),
-            InternetLatencySensor(entry),
-            LastTransitionSensor(entry),
-            SpeedtestSensor(entry, "download"),
-            SpeedtestSensor(entry, "upload"),
-            SpeedtestSensor(entry, "ping"),
-            SpeedtestLastRunSensor(entry),
-            VpnClientsSensor(entry),
-        ]
-    )
-    if entry.runtime_data.admin_client is not None:
-        async_add_entities(
-            [
-                DrillLastSensor(entry),
-                DrillDurationSensor(entry, "drill_failover_seconds"),
-                DrillDurationSensor(entry, "drill_restore_seconds"),
-                DrillDataSensor(entry),
-            ]
-        )
-    else:
-        mac = entry.runtime_data.coordinator.data.gateway.mac
-        remove_stale_entities(hass, Platform.SENSOR, [f"{mac}_{key}" for key in DRILL_KEYS])
-
-    def _uplink(uplink: Uplink) -> list[SensorEntity]:
-        entities: list[SensorEntity] = [
-            UplinkLatencySensor(entry, uplink),
-            UplinkAvailabilitySensor(entry, uplink),
-            UplinkAddressSensor(entry, uplink, "ipv4"),
-            UplinkAddressSensor(entry, uplink, "ipv6"),
-        ]
-        if uplink.port:
-            entities.append(UplinkLinkSpeedSensor(entry, uplink))
-        return entities
+    """Add the sensors; the uplinks' details, speed tests and drills are on the page."""
+    async_add_entities([ActiveUplinkSensor(entry), InternetLatencySensor(entry)])
 
     def _lte(lte: LteBackup) -> list[SensorEntity]:
         return [
@@ -85,7 +39,6 @@ async def async_setup_entry(
             LteSignalSensor(entry, lte),
         ]
 
-    add_dynamic_entities(entry, async_add_entities, lambda state: state.uplinks, _uplink)
     add_dynamic_entities(entry, async_add_entities, lambda state: state.lte or {}, _lte)
 
 
@@ -144,293 +97,6 @@ class InternetLatencySensor(NetworkPlusEntity, SensorEntity):
         """Return the uplink the latency was measured on."""
         active = self.coordinator.data.active
         return {"uplink": active.lower() if active else None}
-
-
-class LastTransitionSensor(NetworkPlusEntity, SensorEntity):
-    """When the gateway last switched to or from the LTE backup."""
-
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_translation_key = "last_transition"
-
-    def __init__(self, entry: NetworkConfigEntry) -> None:
-        """Initialize the sensor."""
-        super().__init__(entry, "last_transition")
-
-    @property
-    def native_value(self) -> datetime | None:
-        """Return the time of the last switch."""
-        return self.coordinator.data.last_transition
-
-
-class SpeedtestResultEntity(NetworkPlusEntity):
-    """An entity of the last speed test.
-
-    A new result is written in the context of the event the coordinator
-    fired for it, so the logbook names the test, with its numbers, as the
-    cause of the state change.
-    """
-
-    _announced: datetime | None = None
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        fresh = self.coordinator.speedtest_context
-        if fresh is not None and fresh[0] != self._announced:
-            self._announced = fresh[0]
-            self.async_set_context(fresh[1])
-        super()._handle_coordinator_update()
-
-
-class SpeedtestSensor(SpeedtestResultEntity, SensorEntity):
-    """Download, upload or ping of the gateway's last speed test."""
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
-
-    def __init__(self, entry: NetworkConfigEntry, key: str) -> None:
-        """Initialize the sensor for ``key``: download, upload or ping."""
-        super().__init__(entry, f"speedtest_{key}")
-        self._key = key
-        self._attr_translation_key = f"speedtest_{key}"
-        if key == "ping":
-            self._attr_device_class = SensorDeviceClass.DURATION
-            self._attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
-        else:
-            self._attr_device_class = SensorDeviceClass.DATA_RATE
-            self._attr_native_unit_of_measurement = UnitOfDataRate.MEGABITS_PER_SECOND
-            self._attr_suggested_display_precision = 0
-
-    @property
-    def native_value(self) -> float | int | None:
-        """Return the value of the last speed test."""
-        speedtest = self.coordinator.data.speedtest
-        value: float | int | None = getattr(speedtest, self._key) if speedtest else None
-        return value
-
-    @property
-    def extra_state_attributes(self) -> dict[str, str | None]:
-        """Return the uplink the test ran over, so values of different uplinks stay apart."""
-        return _speedtest_uplink(self.coordinator.data)
-
-
-class SpeedtestLastRunSensor(SpeedtestResultEntity, SensorEntity):
-    """When the gateway last ran a speed test."""
-
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_translation_key = "speedtest_last_run"
-
-    def __init__(self, entry: NetworkConfigEntry) -> None:
-        """Initialize the sensor."""
-        super().__init__(entry, "speedtest_last_run")
-
-    @property
-    def native_value(self) -> datetime | None:
-        """Return the time of the last speed test."""
-        speedtest = self.coordinator.data.speedtest
-        return speedtest.last_run if speedtest else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return the result as the gateway reports it, whether a test runs, and the uplink."""
-        data = self.coordinator.data
-        return {
-            "status": data.speedtest.status if data.speedtest else None,
-            "running": data.speedtest.running if data.speedtest else None,
-            **_speedtest_uplink(data),
-        }
-
-
-def _speedtest_uplink(data: NetworkState) -> dict[str, str | None]:
-    """Return the key and the name of the uplink the last speed test ran over."""
-    key = data.speedtest.uplink if data.speedtest else None
-    uplink = data.uplinks.get(key) if key else None
-    return {"uplink": key.lower() if key else None, "uplink_name": uplink.name if uplink else None}
-
-
-class VpnClientsSensor(NetworkPlusEntity, SensorEntity):
-    """How many remote clients (Teleport, VPN) are connected."""
-
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_translation_key = "vpn_clients"
-
-    def __init__(self, entry: NetworkConfigEntry) -> None:
-        """Initialize the sensor."""
-        super().__init__(entry, "vpn_clients")
-
-    @property
-    def native_value(self) -> int | None:
-        """Return the number of remote clients; None if the console did not tell."""
-        clients = self.coordinator.data.vpn_clients
-        return len(clients) if clients is not None else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, list[str]]:
-        """Return the names and kinds of the remote clients."""
-        clients = self.coordinator.data.vpn_clients or ()
-        return {
-            "clients": [c.name for c in clients],
-            "types": sorted({c.type.lower() for c in clients}),
-        }
-
-
-class UplinkLatencySensor(UplinkEntity, SensorEntity):
-    """Average latency of the gateway's monitors on the uplink."""
-
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-    _attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_translation_key = "uplink_latency"
-
-    def __init__(self, entry: NetworkConfigEntry, uplink: Uplink) -> None:
-        """Initialize the sensor."""
-        super().__init__(entry, uplink, "latency")
-
-    @property
-    def native_value(self) -> int | None:
-        """Return the latency."""
-        uplink = self.uplink
-        return uplink.latency if uplink else None
-
-
-class UplinkAvailabilitySensor(UplinkEntity, SensorEntity):
-    """Share of the gateway's monitoring period in which the uplink was available."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-    _attr_native_unit_of_measurement = PERCENTAGE
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_suggested_display_precision = 1
-    _attr_translation_key = "uplink_availability"
-
-    def __init__(self, entry: NetworkConfigEntry, uplink: Uplink) -> None:
-        """Initialize the sensor."""
-        super().__init__(entry, uplink, "availability")
-
-    @property
-    def native_value(self) -> float | None:
-        """Return the availability."""
-        uplink = self.uplink
-        return uplink.availability if uplink else None
-
-
-class UplinkAddressSensor(UplinkEntity, SensorEntity):
-    """Public IPv4 or IPv6 address of the uplink's port.
-
-    Disabled by default: an address in the recorder is a choice to make.
-    """
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_entity_registry_enabled_default = False
-
-    def __init__(self, entry: NetworkConfigEntry, uplink: Uplink, family: str) -> None:
-        """Initialize the sensor for ``family``: ipv4 or ipv6."""
-        super().__init__(entry, uplink, family)
-        self._family = family
-        self._attr_translation_key = f"uplink_{family}"
-
-    @property
-    def native_value(self) -> str | None:
-        """Return the address."""
-        uplink = self.uplink
-        value: str | None = getattr(uplink, self._family) if uplink else None
-        return value
-
-
-class UplinkLinkSpeedSensor(UplinkEntity, SensorEntity):
-    """What the uplink's port negotiated, in Mbit/s; unknown while the link is down."""
-
-    _attr_device_class = SensorDeviceClass.DATA_RATE
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_native_unit_of_measurement = UnitOfDataRate.MEGABITS_PER_SECOND
-    _attr_suggested_display_precision = 0
-    _attr_translation_key = "link_speed"
-
-    def __init__(self, entry: NetworkConfigEntry, uplink: Uplink) -> None:
-        """Initialize the sensor."""
-        super().__init__(entry, uplink, "link_speed")
-
-    @property
-    def native_value(self) -> int | None:
-        """Return the negotiated speed."""
-        uplink = self.uplink
-        return uplink.link_speed if uplink else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, bool | None]:
-        """Return whether the link is full duplex."""
-        uplink = self.uplink
-        return {"full_duplex": uplink.full_duplex if uplink else None}
-
-
-class DrillLastSensor(NetworkPlusEntity, SensorEntity):
-    """When the last backup drill started, with its results as attributes."""
-
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
-    _attr_translation_key = "drill_last"
-
-    def __init__(self, entry: NetworkConfigEntry) -> None:
-        """Initialize the sensor."""
-        super().__init__(entry, "drill_last")
-
-    @property
-    def native_value(self) -> datetime | None:
-        """Return the start of the last drill."""
-        drill = self.coordinator.drill
-        return drill.started_at if drill else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return how the drill went."""
-        drill = self.coordinator.drill
-        if drill is None:
-            return {"completed": None}
-        return {"completed": drill.completed, **drill.event_attributes()}
-
-
-class DrillDurationSensor(NetworkPlusEntity, SensorEntity):
-    """How long the last drill's failover or return took, in seconds."""
-
-    _attr_device_class = SensorDeviceClass.DURATION
-    _attr_native_unit_of_measurement = UnitOfTime.SECONDS
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_suggested_display_precision = 0
-
-    def __init__(self, entry: NetworkConfigEntry, key: str) -> None:
-        """Initialize the sensor for ``key``: drill_failover_seconds or drill_restore_seconds."""
-        super().__init__(entry, key)
-        self._attr_translation_key = key
-        self._field = "failover_seconds" if key == "drill_failover_seconds" else "restore_seconds"
-
-    @property
-    def native_value(self) -> float | None:
-        """Return the duration; None until the drill reached that step."""
-        drill: Drill | None = self.coordinator.drill
-        value: float | None = getattr(drill, self._field) if drill else None
-        return value
-
-
-class DrillDataSensor(NetworkPlusEntity, SensorEntity):
-    """LTE data the last drill cost."""
-
-    _attr_device_class = SensorDeviceClass.DATA_SIZE
-    _attr_native_unit_of_measurement = UnitOfInformation.BYTES
-    _attr_suggested_unit_of_measurement = UnitOfInformation.MEGABYTES
-    _attr_suggested_display_precision = 0
-    _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_translation_key = "drill_data_used"
-
-    def __init__(self, entry: NetworkConfigEntry) -> None:
-        """Initialize the sensor."""
-        super().__init__(entry, "drill_data_used")
-
-    @property
-    def native_value(self) -> int | None:
-        """Return the bytes; None until the drill completed."""
-        drill = self.coordinator.drill
-        return drill.data_used if drill else None
 
 
 class LteUsagePercentSensor(LteEntity, SensorEntity):

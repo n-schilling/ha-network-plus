@@ -15,6 +15,7 @@ from custom_components.network_plus.const import (
     CONF_ADMIN_PASSWORD,
     CONF_ADMIN_USERNAME,
     CONF_AUTO_OFF_MINUTES,
+    CONF_HISTORY_DAYS,
     CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
     CONF_USE_ADMIN,
@@ -209,19 +210,27 @@ async def test_reconfigure_toggles_admin(
 
 
 async def test_options(hass: HomeAssistant, setup_admin_entry: MockConfigEntry) -> None:
-    """The auto-off time, the LTE limit and the billing day are options."""
+    """The auto-off time, the LTE limit, the billing day and the kept history are options."""
     result = await hass.config_entries.options.async_init(setup_admin_entry.entry_id)
     assert result["type"] is FlowResultType.FORM
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
-        {CONF_AUTO_OFF_MINUTES: 30, CONF_LTE_LIMIT_PERCENT: 50, CONF_LTE_BILLING_DAY: 15},
+        {
+            CONF_AUTO_OFF_MINUTES: 30,
+            CONF_LTE_LIMIT_PERCENT: 50,
+            CONF_LTE_BILLING_DAY: 15,
+            CONF_HISTORY_DAYS: 30,
+        },
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert setup_admin_entry.options == {
         CONF_AUTO_OFF_MINUTES: 30,
         CONF_LTE_LIMIT_PERCENT: 50,
         CONF_LTE_BILLING_DAY: 15,
+        CONF_HISTORY_DAYS: 30,
     }
+    await hass.async_block_till_done()
+    assert setup_admin_entry.runtime_data.history.days == 30
 
 
 async def test_options_billing_day_defaults_to_the_first(
@@ -262,9 +271,27 @@ async def test_options_expected_link_speed(
 async def test_options_without_loaded_entry(
     hass: HomeAssistant, setup_admin_entry: MockConfigEntry
 ) -> None:
-    """An entry that is not loaded offers no link speeds; nothing is known about its ports."""
+    """An entry that is not loaded offers no link speeds, and keeps the ones it has."""
+    hass.config_entries.async_update_entry(
+        setup_admin_entry, options={"expected_speed_wan": 2500, "expected_speed_wan2": 0}
+    )
+    await hass.async_block_till_done()
     await hass.config_entries.async_unload(setup_admin_entry.entry_id)
     await hass.async_block_till_done()
     result = await hass.config_entries.options.async_init(setup_admin_entry.entry_id)
     fields = {str(key) for key in result["data_schema"].schema}
-    assert fields == {CONF_AUTO_OFF_MINUTES, CONF_LTE_LIMIT_PERCENT, CONF_LTE_BILLING_DAY}
+    assert fields == {
+        CONF_AUTO_OFF_MINUTES,
+        CONF_LTE_LIMIT_PERCENT,
+        CONF_LTE_BILLING_DAY,
+        CONF_HISTORY_DAYS,
+    }
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_AUTO_OFF_MINUTES: 15, CONF_LTE_LIMIT_PERCENT: 80}
+    )
+    assert setup_admin_entry.options["expected_speed_wan"] == 2500
+    assert "expected_speed_wan2" not in setup_admin_entry.options
+    # The options flow reloads the entry; unload it again for the end of the test
+    await hass.async_block_till_done()
+    await hass.config_entries.async_unload(setup_admin_entry.entry_id)
+    await hass.async_block_till_done()

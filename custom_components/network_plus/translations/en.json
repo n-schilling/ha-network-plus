@@ -123,38 +123,8 @@
           "wan4": "WAN 4"
         }
       },
-      "last_transition": {
-        "name": "Last LTE failover"
-      },
-      "uplink_latency": {
-        "name": "{uplink} latency"
-      },
-      "uplink_availability": {
-        "name": "{uplink} availability"
-      },
       "internet_latency": {
         "name": "Internet latency"
-      },
-      "speedtest_download": {
-        "name": "Speed test download"
-      },
-      "speedtest_upload": {
-        "name": "Speed test upload"
-      },
-      "speedtest_ping": {
-        "name": "Speed test ping"
-      },
-      "speedtest_last_run": {
-        "name": "Last speed test"
-      },
-      "vpn_clients": {
-        "name": "VPN clients"
-      },
-      "uplink_ipv4": {
-        "name": "{uplink} IPv4"
-      },
-      "uplink_ipv6": {
-        "name": "{uplink} IPv6"
       },
       "lte_usage_percent": {
         "name": "LTE data used"
@@ -167,21 +137,6 @@
       },
       "lte_signal": {
         "name": "LTE signal"
-      },
-      "link_speed": {
-        "name": "{uplink} link speed"
-      },
-      "drill_last": {
-        "name": "Last backup drill"
-      },
-      "drill_failover_seconds": {
-        "name": "Backup drill failover time"
-      },
-      "drill_restore_seconds": {
-        "name": "Backup drill restore time"
-      },
-      "drill_data_used": {
-        "name": "Backup drill data used"
       }
     },
     "switch": {
@@ -244,7 +199,8 @@
           "expected_speed_wan": "Expected link speed of WAN 1",
           "expected_speed_wan2": "Expected link speed of WAN 2",
           "expected_speed_wan3": "Expected link speed of WAN 3",
-          "expected_speed_wan4": "Expected link speed of WAN 4"
+          "expected_speed_wan4": "Expected link speed of WAN 4",
+          "history_days": "Keep history"
         },
         "data_description": {
           "auto_off_minutes": "Minutes after which the preferred uplink is switched on again by itself. In a test, about 60 MB per minute ran over LTE.",
@@ -253,7 +209,8 @@
           "expected_speed_wan": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",
           "expected_speed_wan2": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",
           "expected_speed_wan3": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",
-          "expected_speed_wan4": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex."
+          "expected_speed_wan4": "What the WAN port should negotiate, in Mbit/s, for example 2500 for a 2.5G port. Empty or 0: not checked. With a value, a binary sensor turns on while the port negotiated less or half duplex.",
+          "history_days": "Days the page keeps switches, speed tests and remote sessions. Backup drills stay."
         }
       }
     }

@@ -144,13 +144,17 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   (`add_uplink_entities`, `add_lte_entities`).
 - An uplink entity is unavailable while the gateway stops reporting that
   uplink; "offline" is reported only when the gateway says so.
-- Disabled by default: latency and availability per uplink, the public
-  addresses, the LTE signal. Enabled: what a dashboard or automation needs.
-- **Link speed:** every uplink with a port object (`wan1`, `wan2`, …; the LTE
-  backup has none) gets a diagnostic sensor with what the port negotiated.
-  The expected speed is an option per network group (`expected_speed_wan`,
+- Entities are what automations and dashboards need. Details (latency and
+  availability per uplink, addresses, link speed) and history (switches,
+  speed tests, drills, remote sessions) are on the page, not in sensors: the
+  recorder would keep a state per poll for values nobody charts. The LTE
+  signal stays a sensor, disabled by default, because its statistics are
+  what a "signal got worse" helper needs.
+- **Link speed:** what a port (`wan1`, `wan2`, …; the LTE backup has none)
+  negotiated is on the page. The expected speed is an option per network group (`expected_speed_wan`,
   … `_wan4`: static keys, so they have translations; the options flow shows
-  only the ports the gateway reports). The problem sensor "link slower than
+  only the ports the gateway reports, and keeps the stored ones it cannot
+  show while the console is unreachable). The problem sensor "link slower than
   expected" exists only for ports with an expectation and goes with it: the
   options flow reloads the entry, and setup removes sensors without one. A
   link that is down is unknown there, not slow. Speed and duplex are part of
@@ -177,18 +181,38 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   moment, which the backup recipe keeps active until the result arrived. It
   is kept in the entry's data (`speedtest_uplink`), so a restart does not
   reassign a result to whatever uplink is active then; an interface the
-  gateway names later wins. The four speed test sensors carry the key and
-  the name as attributes, so values measured over the backup do not pass for
-  the main line's.
-- **Speed test in the activity:** a result that arrives while the integration
-  watches (not the one found at setup or after a restart) fires the bus event
-  `network_plus_speedtest` with the numbers and the uplink, in a fresh
-  `Context`. `logbook.py` describes the event for the logbook; the result is
-  in the entry's *name*, because the activity details render only the name
-  of a cause, not its message. The speed test sensors write the new result
-  in that context (`SpeedtestResultEntity`), so the logbook names the test
-  as the cause of their state change. The context is used once per run
-  time; Home Assistant drops it from later writes after a few seconds.
+  gateway names later wins, so values measured over the backup do not pass
+  for the main line's.
+- **Speed tests and drills in the activity:** a result that arrives while
+  the integration watches (not the one found at setup or after a restart)
+  fires the bus event `network_plus_speedtest` with the numbers and the
+  uplink; a completed drill fires `network_plus_drill`. `logbook.py`
+  describes both; the result is in the entry's *name*, because the activity
+  details render only the name of a cause, not its message.
+
+## The page
+
+- `frontend.py` serves `frontend/` under `/network_plus` once per run and
+  registers the panel `network-plus` (`panel_custom`, `require_admin`,
+  module URL with the version so a release is fetched anew). It stays through
+  a reload, so an open page is not thrown out while an option changes, and
+  goes in `async_remove_entry` with the last console.
+- One WebSocket command, `network_plus/overview` (admin only: addresses and
+  remote client names): the consoles, and for the one asked for (else the
+  first) the state now and the history. The page asks every 30 s while it is
+  open and visible; a push channel would add code for a page that shows
+  minutes-old history.
+- `history.py` keeps one `Store` per console
+  (`network_plus.history.<entry_id>`): the coordinator's events (failover,
+  restored, brief failover, uplink down/up, public IP changed without the
+  addresses), speed tests and drills from their bus events (deduplicated by
+  run or start time), and remote sessions from the client list on every
+  coordinator update (a client that appears opens a session, one that leaves
+  closes it; an unknown list changes nothing). Saved 10 s after a change and
+  on unload; entries older than the option *Keep history* (365 days) go,
+  drills and open sessions stay.
+- The page is plain JavaScript without a build step, one file, styled with
+  the theme's variables like Home Assistant's settings pages.
 
 ## The admin opt-in, the switch "Enforce backup uplink" and the speed test buttons
 

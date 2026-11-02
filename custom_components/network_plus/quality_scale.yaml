@@ -81,7 +81,7 @@ rules:
   entity-device-class: done
   entity-disabled-by-default:
     status: done
-    comment: Latency and availability per uplink are disabled by default.
+    comment: The LTE signal is disabled by default.
   entity-translations: done
   exception-translations: done
   icon-translations: done

@@ -31,16 +31,19 @@ from .const import (
     CONF_ADMIN_PASSWORD,
     CONF_ADMIN_USERNAME,
     CONF_AUTO_OFF_MINUTES,
+    CONF_HISTORY_DAYS,
     CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
     CONF_USE_ADMIN,
     DEFAULT_AUTO_OFF_MINUTES,
+    DEFAULT_HISTORY_DAYS,
     DEFAULT_LTE_BILLING_DAY,
     DEFAULT_LTE_LIMIT_PERCENT,
     DOMAIN,
     EXPECTED_SPEED_OPTIONS,
     MAX_AUTO_OFF_MINUTES,
     MAX_EXPECTED_SPEED,
+    MAX_HISTORY_DAYS,
     MAX_LTE_BILLING_DAY,
     MAX_LTE_LIMIT_PERCENT,
     MIN_AUTO_OFF_MINUTES,
@@ -288,10 +291,18 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                 CONF_AUTO_OFF_MINUTES: int(user_input[CONF_AUTO_OFF_MINUTES]),
                 CONF_LTE_LIMIT_PERCENT: int(user_input[CONF_LTE_LIMIT_PERCENT]),
                 CONF_LTE_BILLING_DAY: int(user_input[CONF_LTE_BILLING_DAY]),
+                CONF_HISTORY_DAYS: int(user_input[CONF_HISTORY_DAYS]),
             }
+            shown = self._speed_options()
             for option in EXPECTED_SPEED_OPTIONS.values():
-                # 0 or empty: no expectation, the sensor goes
-                if (value := user_input.get(option)) and int(value) > 0:
+                # A field the form did not show (the console was unreachable)
+                # keeps its value; 0 or empty: no expectation, the sensor goes
+                value = (
+                    user_input.get(option)
+                    if option in shown
+                    else self.config_entry.options.get(option)
+                )
+                if value and int(value) > 0:
                     data[option] = int(value)
             return self.async_create_entry(data=data)
         options = self.config_entry.options
@@ -345,6 +356,18 @@ class OptionsFlowHandler(OptionsFlowWithReload):
                         max=MAX_LTE_BILLING_DAY,
                         step=1,
                         mode=NumberSelectorMode.BOX,
+                    )
+                ),
+                probatio.Required(
+                    CONF_HISTORY_DAYS,
+                    default=options.get(CONF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS),
+                ): NumberSelector(
+                    NumberSelectorConfig(
+                        min=1,
+                        max=MAX_HISTORY_DAYS,
+                        step=1,
+                        mode=NumberSelectorMode.BOX,
+                        unit_of_measurement="d",
                     )
                 ),
             }

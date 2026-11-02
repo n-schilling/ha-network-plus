@@ -123,38 +123,8 @@
           "wan4": "WAN 4"
         }
       },
-      "last_transition": {
-        "name": "Letzte LTE-Umschaltung"
-      },
-      "uplink_latency": {
-        "name": "{uplink} Latenz"
-      },
-      "uplink_availability": {
-        "name": "{uplink} Verfügbarkeit"
-      },
       "internet_latency": {
         "name": "Internet-Latenz"
-      },
-      "speedtest_download": {
-        "name": "Speedtest Download"
-      },
-      "speedtest_upload": {
-        "name": "Speedtest Upload"
-      },
-      "speedtest_ping": {
-        "name": "Speedtest Ping"
-      },
-      "speedtest_last_run": {
-        "name": "Letzter Speedtest"
-      },
-      "vpn_clients": {
-        "name": "VPN-Clients"
-      },
-      "uplink_ipv4": {
-        "name": "{uplink} IPv4"
-      },
-      "uplink_ipv6": {
-        "name": "{uplink} IPv6"
       },
       "lte_usage_percent": {
         "name": "LTE-Daten verbraucht"
@@ -167,21 +137,6 @@
       },
       "lte_signal": {
         "name": "LTE-Signal"
-      },
-      "link_speed": {
-        "name": "{uplink} Link-Geschwindigkeit"
-      },
-      "drill_last": {
-        "name": "Letzte Backup-Übung"
-      },
-      "drill_failover_seconds": {
-        "name": "Backup-Übung Umschaltdauer"
-      },
-      "drill_restore_seconds": {
-        "name": "Backup-Übung Rückkehrdauer"
-      },
-      "drill_data_used": {
-        "name": "Backup-Übung Datenverbrauch"
       }
     },
     "switch": {
@@ -244,7 +199,8 @@
           "expected_speed_wan": "Erwartete Link-Geschwindigkeit von WAN 1",
           "expected_speed_wan2": "Erwartete Link-Geschwindigkeit von WAN 2",
           "expected_speed_wan3": "Erwartete Link-Geschwindigkeit von WAN 3",
-          "expected_speed_wan4": "Erwartete Link-Geschwindigkeit von WAN 4"
+          "expected_speed_wan4": "Erwartete Link-Geschwindigkeit von WAN 4",
+          "history_days": "Verlauf aufbewahren"
         },
         "data_description": {
           "auto_off_minutes": "Minuten, nach denen die bevorzugte Leitung von selbst wieder eingeschaltet wird. Beim Test liefen rund 60 MB pro Minute über LTE.",
@@ -253,7 +209,8 @@
           "expected_speed_wan": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",
           "expected_speed_wan2": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",
           "expected_speed_wan3": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",
-          "expected_speed_wan4": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat."
+          "expected_speed_wan4": "Was der WAN-Port aushandeln soll, in Mbit/s, zum Beispiel 2500 an einem 2,5G-Port. Leer oder 0: keine Prüfung. Mit Wert gibt es einen Binärsensor, der an ist, solange der Port weniger oder nur Halbduplex ausgehandelt hat.",
+          "history_days": "Tage, die die Seite Umschaltungen, Speedtests und Fernzugriffe aufbewahrt. Backup-Übungen bleiben."
         }
       }
     }

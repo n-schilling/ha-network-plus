@@ -5,7 +5,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![HACS: custom](https://img.shields.io/badge/HACS-custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories)
 
-A custom integration that adds what the UniFi integration shipped with Home Assistant does not show: uplink status and failover, latency, speed test results and buttons to run a test, also over the backup uplink, public addresses, the LTE data plan and remote clients. It complements that integration, it does not replace it. This project is not affiliated with or endorsed by Ubiquiti.
+A custom integration that adds what the UniFi integration shipped with Home Assistant does not show: uplink status and failover, latency, buttons to run a speed test, also over the backup uplink, the LTE data plan and a page of its own with the uplinks' details, the history of failovers, speed tests, backup drills and remote sessions. It complements that integration, it does not replace it. This project is not affiliated with or endorsed by Ubiquiti.
 
 ## What it shows
 
@@ -15,19 +15,18 @@ Which internet uplink of the gateway is online, which one carries the traffic, a
 
 The built-in UniFi integration reports latency, but not whether an uplink is down or which one is active. A failover that lasts a few seconds is easy to miss by polling, so this integration listens to the console's websocket, which sends the gateway's state about once a second. Numbers (latency, speed test, data usage, remote clients) are sampled every 60 seconds instead, so the recorder is not flooded.
 
+Entities are kept to what automations and dashboards need. The details (link speed, addresses, the gateway's own latency and availability per uplink) and the history (switches, speed tests, drills, remote sessions) are on [the page](#the-page).
+
 | Entity | What it shows |
 |---|---|
 | Binary sensor per uplink, named like the uplink in UniFi Network | Online or offline, as the gateway sees it |
 | Binary sensor "Backup uplink active" | On while another uplink than the preferred one carries the traffic |
 | Sensor "Active uplink" | `wan`, `wan2`, `wan_lte_failover`, …; the attribute `uplink_name` holds the name set in UniFi Network |
 | Sensor "Internet latency" | Latency on the uplink that carries the traffic, one series across failovers |
-| Event "Internet" | `failover`, `restored`, `brief_failover`, `uplink_down`, `uplink_up`, `public_ip_changed` |
-| Sensor "Last LTE failover" (diagnostic) | When the gateway last switched to or from the LTE backup |
-| Latency and availability per uplink (diagnostic, disabled) | The gateway's own monitoring values |
-| Sensor "<uplink> link speed" (diagnostic) | What the uplink's port negotiated, in Mbit/s; unknown while the link is down. Attribute `full_duplex` |
+| Event "Internet" | `failover`, `restored`, `brief_failover`, `uplink_down`, `uplink_up`, `public_ip_changed`, `drill_completed` |
 | Binary sensor "<uplink> link slower than expected" | Only with an expected link speed in the options: on while the port negotiated less than that, or half duplex. A link that is down is not slow; the sensor is unknown then |
 
-A port that negotiated 1000 Mbit/s on a 2.5G line is a bad cable or a bad port, and nobody notices without looking. Set the speed each WAN port should negotiate in the integration's options (one field per WAN port the gateway reports, for example 2500); the problem sensor exists only for ports with a value.
+A port that negotiated 1000 Mbit/s on a 2.5G line is a bad cable or a bad port, and nobody notices without looking. Set the speed each WAN port should negotiate in the integration's options (one field per WAN port the gateway reports, for example 2500); the problem sensor exists only for ports with a value. The page shows the negotiated speed of every port.
 
 Only uplinks the gateway monitors get entities; a configured but unused WAN port has none. An uplink is reported offline only when the gateway says so. If the console cannot be reached, the entities become unavailable instead.
 
@@ -35,15 +34,15 @@ Only uplinks the gateway monitors get entities; a configured but unused WAN port
 
 ### Speed test
 
-Download, upload and ping of the gateway's last speed test, and when it ran (diagnostic, with the result as attribute `status` and `running` while a test is in progress). All four sensors carry the attributes `uplink` and `uplink_name`: the uplink the test ran over. The gateway names the test's interface only for a while after the test, so the integration notes the uplink when it first sees a result (from the interface, or the uplink that carries the traffic at that moment) and keeps it, also across restarts. A test that ran over the backup therefore does not pass for a measurement of the main line, and an automation or a template can keep the two apart.
+The results of the gateway's speed tests are read; tests run in UniFi Network, by hand or on its schedule. With admin features, the button **"Run speed test"** starts one from Home Assistant (see below). A test that starts or finishes shows at once, not only with the next poll.
 
-The results are read; speed tests run in UniFi Network, by hand or on its schedule. With admin features, the button **"Run speed test"** starts one from Home Assistant (see below). A test that starts or finishes shows at once, not only with the next poll.
+Every finished test is an entry of its own in the activity (the logbook), named with the result, for example `Gateway · ↓ 940 Mbit/s · ↑ 50 Mbit/s · 18 ms · WAN`, and a line in the page's speed test history. The uplink is the one the test ran over: the gateway names the test's interface only for a while after the test, so the integration notes the uplink when it first sees a result (from the interface, or the uplink that carries the traffic at that moment) and keeps it, also across restarts. A test that ran over the backup therefore does not pass for a measurement of the main line.
 
-Every finished test is also an entry of its own in the activity (the logbook), named with the result, for example `Gateway · ↓ 940 Mbit/s · ↑ 50 Mbit/s · 18 ms · WAN`. The four sensors change state in that entry's context, so the activity details of "Last speed test" show the test with its numbers under "What happened", and the activity list shows the result next to the state change.
+For automations the integration fires the event `network_plus_speedtest` with `download`, `upload` (Mbit/s), `ping` (ms), `last_run`, `uplink`, `uplink_name`, `gateway` and `entry_id`.
 
 ### Public addresses
 
-Per uplink a sensor with the IPv4 and one with the IPv6 address of its port (diagnostic, disabled by default: an address in the recorder is your choice). Behind another router this is a private address. The event `public_ip_changed` fires when an address changes, with `family`, `address` and `previous`, so DynDNS or similar can follow. An address that appears or vanishes, for example while an uplink is down, is no change.
+The event `public_ip_changed` fires when an address of an uplink's port changes, with `family`, `address` and `previous`, so DynDNS or similar can follow. An address that appears or vanishes, for example while an uplink is down, is no change. Behind another router this is a private address. The page shows the current addresses.
 
 ### LTE backup
 
@@ -65,9 +64,17 @@ If the console has an LTE backup device, it gets a device of its own below the g
 - A day missing from the reports counts as used, so a warning comes early rather than late. If the reports cannot be read (the user needs read access to the statistics), the two sensors are unknown and the log says why.
 - The console keeps the daily reports for 90 days by default, enough for any billing period.
 
-### Remote clients
+### The page
 
-Sensor "VPN clients": how many Teleport or VPN clients are connected right now, with their names in the attribute `clients` and the kinds in `types`. Unknown if the console does not offer the client list.
+**Network Plus** in the sidebar, for administrators. It shows one console at a time (a choice in the toolbar when there are several) and reads it again every 30 seconds while it is open:
+
+- **Uplinks**: the active uplink, latency, last switch, last speed test and last drill; per uplink its state, the gateway's latency and availability, the negotiated link speed against the expected one, port, connection type and public addresses; the LTE backup with data used against the plan and the signal.
+- **History**: failovers and returns with how long the backup carried the traffic, brief failovers, uplinks going down and up with how long they were gone, new public addresses (the uplink and the family, not the address).
+- **Speed tests**: download over time per uplink, and every result with upload and ping.
+- **Backup drills**: every drill with failover time, return time and LTE data, and the averages.
+- **Remote access**: the Teleport and VPN clients connected now, and the finished sessions.
+
+The history is kept by the integration in a store of its own (`.storage/network_plus.history.<entry>`), not in the recorder, for 365 days (option *Keep history*, 1 to 3650 days); backup drills stay. It starts with the installation: nothing from before is shown. Removing the console removes its history.
 
 ### Admin features (opt-in): enforce the backup uplink, run a speed test
 
@@ -83,20 +90,11 @@ The switch guards itself:
 
 Mind the data: in a test, about 60 MB per minute ran over LTE while the backup was enforced. The attributes `enforced_since` and `auto_off_at` show what is going on.
 
-**Drill protocol.** Every use of the switch is a drill of the failover, and the integration keeps the result of the last one (across restarts):
+**Drill protocol.** Every use of the switch is a drill of the failover. The integration times it, also across restarts: the seconds from switching the uplink off until the gateway routed over the backup, the seconds from switching it on again until the gateway routed over it (none if the uplink was switched on by hand in the console), and the LTE data it cost, from the console's monthly counter. Once the gateway is back, the drill is an entry in the activity, for example `Gateway · ⇄ · → 20 s · ← 12 s · 25 MB`, a line on the page, and the event "Internet" fires `drill_completed` with `started_at`, `failover_seconds`, `restore_seconds` and `data_used_bytes`. The bus event `network_plus_drill` carries the same with `gateway` and `entry_id`. Times come from Home Assistant's clock, so drills compare with each other.
 
-| Entity | What it shows |
-|---|---|
-| Sensor "Last backup drill" | When the drill started; attributes `completed`, `failover_seconds`, `restore_seconds`, `data_used_bytes` |
-| Sensor "Backup drill failover time" | Seconds from switching the uplink off until the gateway routed over the backup |
-| Sensor "Backup drill restore time" | Seconds from switching the uplink on again until the gateway routed over it. Unknown if the uplink was switched on by hand in the console |
-| Sensor "Backup drill data used" | LTE data the drill cost, from the console's monthly counter |
+The button **"Run speed test"** starts a speed test on the gateway, the same one UniFi Network runs on its schedule. It runs over the uplink that carries the traffic at that moment and takes well under a minute; the result arrives as soon as the gateway reports it. The button refuses while a test is running.
 
-The event "Internet" fires `drill_completed` with the same numbers once the gateway is back, so an automation can log the drill or compare it with the last one. Times come from Home Assistant's clock, so drills compare with each other.
-
-The button **"Run speed test"** starts a speed test on the gateway, the same one UniFi Network runs on its schedule. It runs over the uplink that carries the traffic at that moment and takes well under a minute; the four speed test sensors show the result as soon as the gateway reports it, with the uplink as attribute. The button refuses while a test is running.
-
-The button **"Run speed test over backup uplink"** measures the backup: it switches the preferred uplink off (the switch turns on, the drill begins), waits for the gateway to fail over, runs the speed test, waits for the result and switches the preferred uplink on again, whatever happened in between. The press returns at once; the attribute `in_progress` says that the measurement is going on. The result arrives like any other, with the backup as `uplink`, and the drill protocol records the data it cost. The button refuses what the switch refuses, a running test and a second measurement. If the gateway does not fail over within 90 seconds or reports no result within 3 minutes, the uplink comes back and a warning goes to the log. See [A speed test over the backup uplink](#a-speed-test-over-the-backup-uplink) for the data cost.
+The button **"Run speed test over backup uplink"** measures the backup: it switches the preferred uplink off (the switch turns on, the drill begins), waits for the gateway to fail over, runs the speed test, waits for the result and switches the preferred uplink on again, whatever happened in between. The press returns at once; the attribute `in_progress` says that the measurement is going on. The result arrives like any other, with the backup as uplink, and the drill protocol records the data it cost. The button refuses what the switch refuses, a running test and a second measurement. If the gateway does not fail over within 90 seconds or reports no result within 3 minutes, the uplink comes back and a warning goes to the log. See [A speed test over the backup uplink](#a-speed-test-over-the-backup-uplink) for the data cost.
 
 ## Using the data
 
@@ -221,7 +219,7 @@ A second trigger on `off` for 30 minutes with `clear_notification` and the same 
 
 ### A speed test over the backup uplink
 
-The speed test sensors normally describe the main line: the gateway runs its scheduled tests over whatever uplink is active, and that is the preferred one nearly all the time. To know what the backup delivers, press **"Run speed test over backup uplink"**, by hand or on a schedule:
+Speed tests normally describe the main line: the gateway runs its scheduled tests over whatever uplink is active, and that is the preferred one nearly all the time. To know what the backup delivers, press **"Run speed test over backup uplink"**, by hand or on a schedule:
 
 ```yaml
 alias: Measure the backup uplink monthly
@@ -238,31 +236,25 @@ actions:
 mode: single
 ```
 
-The result arrives a minute or two later with `uplink: wan_lte_failover` (or whatever the backup's key is) and as an entry in the activity. An automation that wants to tell you waits for the new run time (`to:` without a value fires on the state, not on the attribute `running`) and checks the uplink:
+The result arrives a minute or two later, with the backup as uplink, in the activity and on the page. An automation that wants to tell you listens to the event and checks the uplink:
 
 ```yaml
 triggers:
-  - trigger: state
-    entity_id: sensor.gateway_last_speed_test
-    to:
-conditions:
-  - condition: state
-    entity_id: sensor.gateway_last_speed_test
-    attribute: uplink
-    state: wan_lte_failover
+  - trigger: event
+    event_type: network_plus_speedtest
+    event_data:
+      uplink: wan_lte_failover
 actions:
   - action: notify.mobile_app_phone
     data:
       title: Backup uplink measured
       message: >-
-        {{ states('sensor.gateway_speed_test_download') | round(0) }} Mbit/s down,
-        {{ states('sensor.gateway_speed_test_upload') | round(0) }} Mbit/s up,
-        {{ states('sensor.gateway_speed_test_ping') }} ms.
+        {{ trigger.event.data.download | round(0) }} Mbit/s down,
+        {{ trigger.event.data.upload | round(0) }} Mbit/s up,
+        {{ trigger.event.data.ping }} ms.
 ```
 
-The same attribute keeps the backup's values out of the main line's series, for example `{{ state_attr('sensor.gateway_speed_test_download', 'uplink') == 'wan' }}` as a condition before a value is taken as the main line's.
-
-**Mind the data.** A speed test moves data at full speed for some seconds in each direction. Over a mobile backup that is a noticeable share of a data plan, typically some tens to a few hundred megabytes, on top of what the drill itself costs; the sensor "Backup drill data used" shows the sum afterwards. The button refuses from the configured share of the data plan on, and the drill ends by itself after the configured time (*switch back after*) even if Home Assistant restarts in the middle.
+**Mind the data.** A speed test moves data at full speed for some seconds in each direction. Over a mobile backup that is a noticeable share of a data plan, typically some tens to a few hundred megabytes, on top of what the drill itself costs; the drill on the page shows the sum afterwards. The button refuses from the configured share of the data plan on, and the drill ends by itself after the configured time (*switch back after*) even if Home Assistant restarts in the middle.
 
 ### Dashboard
 
@@ -358,7 +350,7 @@ Developed against a Dream Machine with UniFi Network 10.
 | Verify the certificate | On by default. Turn it off only if the console uses its own self-signed certificate; the connection stays encrypted. |
 | Use admin features | Off by default. On, a second dialog asks for the admin credentials for the switch "Enforce backup uplink" and the two speed test buttons; see above. |
 
-The entry is named after the gateway. Reconfigure changes the address, the user, the certificate check or the admin opt-in; when the read-only password changes, Home Assistant asks for the new one. The options hold the two limits of "Enforce backup uplink", the billing day of the LTE data plan and the expected link speeds.
+The entry is named after the gateway. Reconfigure changes the address, the user, the certificate check or the admin opt-in; when the read-only password changes, Home Assistant asks for the new one. The options hold the two limits of "Enforce backup uplink", the billing day of the LTE data plan, the expected link speeds and how long the page keeps its history. While the console cannot be reached the options show no link speeds; the ones set stay.
 
 ## How the data is updated
 
@@ -377,7 +369,8 @@ Three things need a hand and get a repair issue under Settings → Repairs; each
 ## Known limitations
 
 - Only uplinks the gateway monitors get entities; a configured but unused WAN port has none.
-- The address sensors show the uplink port's address. Behind another router this is a private address.
+- The page shows the uplink port's address. Behind another router this is a private address.
+- The page's history starts with the installation of version 0.8.0 and is kept per console in Home Assistant's storage, not in the recorder; a backup of Home Assistant contains it.
 - The only writes are the switch "Enforce backup uplink" and the two speed test buttons, and only with the admin opt-in. A speed test runs over the active uplink; the console offers no way to pick one, which is why the backup is measured by switching the preferred uplink off.
 - Remote clients are those the console lists as connected; of VPN servers only Teleport was tested.
 - Events are derived from state changes, not from the console's event log; packet loss and "failed multiple times" are not reported.
@@ -393,7 +386,7 @@ Three things need a hand and get a repair issue under Settings → Repairs; each
 
 ## Removal
 
-Delete the integration under Settings → Devices & services. Nothing is left on the console: without the admin opt-in the integration never writes to it, and with it the switch only changes the WAN type of the preferred uplink, which it restores when switched off.
+Delete the integration under Settings → Devices & services; the page and its history go with the last console. Nothing is left on the console: without the admin opt-in the integration never writes to it, and with it the switch only changes the WAN type of the preferred uplink, which it restores when switched off.
 
 ## For developers
 

@@ -66,9 +66,26 @@ CONF_DRILL: Final = "drill"
 # entry: the gateway names the interface only for a while after the test
 CONF_SPEEDTEST_UPLINK: Final = "speedtest_uplink"
 
-# Event on the bus for every finished speed test; the logbook describes it,
-# and the speed test sensors write their new state in its context
+# Events on the bus for every finished speed test and every completed backup
+# drill; the logbook describes them, the page keeps them in its history
 EVENT_SPEEDTEST: Final = "network_plus_speedtest"
+EVENT_DRILL: Final = "network_plus_drill"
+
+# The history of the page: one store per console, saved this many seconds
+# after a change; entries older than the option are dropped
+HISTORY_STORAGE_KEY: Final = "network_plus.history.{entry_id}"
+HISTORY_SAVE_DELAY: Final = 10
+CONF_HISTORY_DAYS: Final = "history_days"
+DEFAULT_HISTORY_DAYS: Final = 365
+MAX_HISTORY_DAYS: Final = 3650
+
+# The page in the sidebar, for administrators
+PANEL_URL_PATH: Final = "network-plus"
+PANEL_ELEMENT: Final = "network-plus-panel"
+PANEL_ICON: Final = "mdi:wan"
+PANEL_TITLE: Final = "Network Plus"
+FRONTEND_URL_BASE: Final = "/network_plus"
+PANEL_FILENAME: Final = "network-plus-panel.js"
 
 # Options: the link speed a WAN port should negotiate, in Mbit/s, by network group
 EXPECTED_SPEED_OPTIONS: Final[dict[str, str]] = {

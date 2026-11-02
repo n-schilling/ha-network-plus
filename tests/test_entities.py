@@ -32,7 +32,6 @@ from .conftest import (
     CLOSE,
     ENTRY_DATA,
     IPV4,
-    IPV6,
     LTE_MAC,
     MAC,
     SPEEDTEST_RUN,
@@ -48,10 +47,8 @@ WAN = "binary_sensor.gateway_cable"
 LTE = "binary_sensor.gateway_lte"
 BACKUP = "binary_sensor.gateway_backup_uplink_active"
 ACTIVE = "sensor.gateway_active_uplink"
-LAST = "sensor.gateway_last_lte_failover"
 EVENT = "event.gateway_internet"
 LATENCY = "sensor.gateway_internet_latency"
-VPN = "sensor.gateway_vpn_clients"
 LTE_PERCENT = "sensor.lte_backup_lte_data_used"
 LTE_USAGE = "sensor.lte_backup_lte_data_this_month"
 LTE_LIMIT = "sensor.lte_backup_lte_data_limit"
@@ -61,6 +58,16 @@ def _state(hass: HomeAssistant, entity_id: str) -> str:
     state = hass.states.get(entity_id)
     assert state is not None, entity_id
     return state.state
+
+
+def _speedtest(entry: MockConfigEntry) -> Any:
+    """Return the last speed test as the coordinator holds it."""
+    return entry.runtime_data.coordinator.data.speedtest
+
+
+def _speedtest_uplink(entry: MockConfigEntry) -> str | None:
+    speedtest = _speedtest(entry)
+    return speedtest.uplink.lower() if speedtest and speedtest.uplink else None
 
 
 async def _poll(hass: HomeAssistant, entry: MockConfigEntry) -> None:
@@ -78,13 +85,14 @@ async def test_entities_after_setup(hass: HomeAssistant, setup_entry: MockConfig
     assert active.state == "wan"  # type: ignore[union-attr]
     assert active.attributes["uplink_name"] == "Cable"  # type: ignore[union-attr]
     assert active.attributes["options"] == ["wan", "wan_lte_failover"]  # type: ignore[union-attr]
-    assert hass.states.get(LAST).state == "2023-11-14T22:13:20+00:00"  # type: ignore[union-attr]
     assert hass.states.get(EVENT).state == STATE_UNKNOWN  # type: ignore[union-attr]
-    # Latency and availability are there, but disabled by default
-    registry = er.async_get(hass)
-    latency = registry.async_get("sensor.gateway_cable_latency")
-    assert latency is not None and latency.disabled_by is er.RegistryEntryDisabler.INTEGRATION
-    assert registry.async_get("sensor.gateway_lte_availability") is not None
+    # The details of the uplinks, the speed tests and the remote clients are on the page
+    sensors = sorted(
+        entry.unique_id.removeprefix(f"{MAC}_")
+        for entry in er.async_entries_for_config_entry(er.async_get(hass), setup_entry.entry_id)
+        if entry.domain == "sensor" and entry.unique_id.startswith(MAC)
+    )
+    assert sensors == ["active_uplink", "internet_latency"]
     device = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, MAC), setup_entry.entry_id)
     assert device is not None
     assert (dr.CONNECTION_NETWORK_MAC, MAC) in device.connections
@@ -93,26 +101,6 @@ async def test_entities_after_setup(hass: HomeAssistant, setup_entry: MockConfig
         "UDMPRO",
         "4.0.0",
     )
-
-
-async def test_enabled_diagnostic_sensors(
-    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
-) -> None:
-    """Latency and availability show the gateway's values once enabled."""
-    config_entry.add_to_hass(hass)
-    registry = er.async_get(hass)
-    for key in ("latency_wan", "availability_wan_lte_failover"):
-        registry.async_get_or_create(
-            "sensor", DOMAIN, f"{MAC}_{key}", config_entry=config_entry, disabled_by=None
-        )
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    await hass.async_block_till_done()
-    states = {
-        key: hass.states.get(str(registry.async_get_entity_id("sensor", DOMAIN, f"{MAC}_{key}")))
-        for key in ("latency_wan", "availability_wan_lte_failover")
-    }
-    assert states["latency_wan"].state == "14"  # type: ignore[union-attr]
-    assert states["availability_wan_lte_failover"].state == "99.5"  # type: ignore[union-attr]
 
 
 async def test_websocket_failover(
@@ -370,32 +358,18 @@ async def test_client_session_keeps_no_cookies(hass: HomeAssistant) -> None:
     assert isinstance(create_session.call_args.kwargs["cookie_jar"], DummyCookieJar)
 
 
-async def test_speedtest_latency_and_vpn_sensors(
+async def test_latency_speedtest_and_remote_clients(
     hass: HomeAssistant, setup_entry: MockConfigEntry
 ) -> None:
-    """Speed test, latency on the active uplink and remote clients come from the first poll."""
+    """Latency on the active uplink, speed test and remote clients come from the first poll."""
     assert _state(hass, LATENCY) == "14"
     assert hass.states.get(LATENCY).attributes["uplink"] == "wan"  # type: ignore[union-attr]
-    assert _state(hass, "sensor.gateway_speed_test_download") == "949.0"
-    assert _state(hass, "sensor.gateway_speed_test_upload") == "54.0"
-    assert _state(hass, "sensor.gateway_speed_test_ping") == "18"
-    last = hass.states.get("sensor.gateway_last_speed_test")
-    assert last.state == "2023-11-14T22:13:20+00:00"  # type: ignore[union-attr]
-    assert last.attributes["status"] == "Success"  # type: ignore[union-attr]
-    assert last.attributes["running"] is False  # type: ignore[union-attr]
-    # Every speed test sensor says which uplink the test ran over
-    for entity_id in (
-        "sensor.gateway_speed_test_download",
-        "sensor.gateway_speed_test_upload",
-        "sensor.gateway_speed_test_ping",
-        "sensor.gateway_last_speed_test",
-    ):
-        attributes = hass.states.get(entity_id).attributes  # type: ignore[union-attr]
-        assert (attributes["uplink"], attributes["uplink_name"]) == ("wan", "Cable")
-    vpn = hass.states.get(VPN)
-    assert vpn.state == "1"  # type: ignore[union-attr]
-    assert vpn.attributes["clients"] == ["Phone"]  # type: ignore[union-attr]
-    assert vpn.attributes["types"] == ["teleport"]  # type: ignore[union-attr]
+    speedtest = _speedtest(setup_entry)
+    assert (speedtest.download, speedtest.upload, speedtest.ping) == (949.0, 54.0, 18)
+    assert speedtest.last_run == datetime(2023, 11, 14, 22, 13, 20, tzinfo=dt_util.UTC)
+    assert (speedtest.status, speedtest.running, speedtest.uplink) == ("Success", False, "WAN")
+    clients = setup_entry.runtime_data.coordinator.data.vpn_clients
+    assert [(c.name, c.type) for c in clients] == [("Phone", "TELEPORT")]
 
 
 async def test_lte_sensors_and_device(hass: HomeAssistant, setup_entry: MockConfigEntry) -> None:
@@ -424,25 +398,20 @@ async def test_lte_sensors_and_device(hass: HomeAssistant, setup_entry: MockConf
     assert setup_entry.runtime_data.coordinator.lte_billing_day == 1
 
 
-async def test_enabled_address_and_signal_sensors(
+async def test_enabled_signal_sensor(
     hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
 ) -> None:
-    """Addresses and the LTE signal show once their sensors are enabled."""
+    """The LTE signal shows once its sensor is enabled."""
     config_entry.add_to_hass(hass)
     registry = er.async_get(hass)
-    for unique_id in (f"{MAC}_ipv4_wan", f"{MAC}_ipv6_wan", f"{LTE_MAC}_signal"):
-        registry.async_get_or_create(
-            "sensor", DOMAIN, unique_id, config_entry=config_entry, disabled_by=None
-        )
+    registry.async_get_or_create(
+        "sensor", DOMAIN, f"{LTE_MAC}_signal", config_entry=config_entry, disabled_by=None
+    )
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    ids = {
-        key: str(registry.async_get_entity_id("sensor", DOMAIN, key))
-        for key in (f"{MAC}_ipv4_wan", f"{MAC}_ipv6_wan", f"{LTE_MAC}_signal")
-    }
-    assert _state(hass, ids[f"{MAC}_ipv4_wan"]) == IPV4
-    assert _state(hass, ids[f"{MAC}_ipv6_wan"]) == IPV6
-    signal = hass.states.get(ids[f"{LTE_MAC}_signal"])
+    signal = hass.states.get(
+        str(registry.async_get_entity_id("sensor", DOMAIN, f"{LTE_MAC}_signal"))
+    )
     assert signal.state == "-77"  # type: ignore[union-attr]
     assert signal.attributes["rsrp"] == -112  # type: ignore[union-attr]
 
@@ -469,11 +438,11 @@ async def test_push_with_numbers_only_waits_for_poll(
     """Changed latency or usage over the websocket shows with the next poll, not at once."""
     await console.push(hass, sync(gateway(latency=99, download=10.0)))
     assert _state(hass, LATENCY) == "14"
-    assert _state(hass, "sensor.gateway_speed_test_download") == "949.0"
+    assert _speedtest(setup_entry).download == 949.0
     console.set_gateway(gateway(latency=99, download=10.0))
     await _poll(hass, setup_entry)
     assert _state(hass, LATENCY) == "99"
-    assert _state(hass, "sensor.gateway_speed_test_download") == "10.0"
+    assert _speedtest(setup_entry).download == 10.0
 
 
 async def test_speedtest_missing(
@@ -481,27 +450,22 @@ async def test_speedtest_missing(
     setup_entry: MockConfigEntry,
     console: FakeConsole,
 ) -> None:
-    """A gateway without speed test results gives unknown sensors."""
+    """A gateway without speed test results has none; results without a run time no uplink."""
     raw = gateway()
     raw["uplink"] = {"comment": "WAN", "latency": 15}
     console.set_gateway(raw)
     await _poll(hass, setup_entry)
-    assert _state(hass, "sensor.gateway_speed_test_download") == STATE_UNKNOWN
-    assert _state(hass, "sensor.gateway_last_speed_test") == STATE_UNKNOWN
-    last = hass.states.get("sensor.gateway_last_speed_test")
-    assert last.attributes["status"] is None  # type: ignore[union-attr]
-    assert last.attributes["running"] is None  # type: ignore[union-attr]
-    assert last.attributes["uplink"] is None  # type: ignore[union-attr]
-    assert hass.states.get("sensor.gateway_speed_test_download").attributes["uplink_name"] is None  # type: ignore[union-attr]
-    # Results without a run time have no uplink either
+    speedtest = _speedtest(setup_entry)
+    assert speedtest is None or (speedtest.download, speedtest.last_run) == (None, None)
+    assert _speedtest_uplink(setup_entry) is None
     raw = gateway(interface=None)
     del raw["speedtest-status"]
     raw["uplink"]["speedtest_lastrun"] = 0
     console.set_gateway(raw)
     await _poll(hass, setup_entry)
-    assert _state(hass, "sensor.gateway_speed_test_download") == "949.0"
-    assert _state(hass, "sensor.gateway_last_speed_test") == STATE_UNKNOWN
-    assert hass.states.get("sensor.gateway_speed_test_download").attributes["uplink"] is None  # type: ignore[union-attr]
+    speedtest = _speedtest(setup_entry)
+    assert (speedtest.download, speedtest.last_run) == (949.0, None)
+    assert _speedtest_uplink(setup_entry) is None
 
 
 async def test_speedtest_over_the_backup_shows_at_once(
@@ -509,23 +473,19 @@ async def test_speedtest_over_the_backup_shows_at_once(
 ) -> None:
     """A speed test that starts or finishes comes through the websocket, with its uplink."""
     await console.push(hass, sync(gateway(speedtest_summary=1)))
-    last = hass.states.get("sensor.gateway_last_speed_test")
-    assert last.attributes["running"] is True  # type: ignore[union-attr]
+    assert _speedtest(setup_entry).running is True
     # The last result stays, with the uplink it was seen with
-    assert last.attributes["uplink"] == "wan"  # type: ignore[union-attr]
-    assert _state(hass, "sensor.gateway_speed_test_download") == "949.0"
+    assert _speedtest_uplink(setup_entry) == "wan"
+    assert _speedtest(setup_entry).download == 949.0
     # Finished: the status block is ahead of the uplink object, and names the interface
     finished = gateway(interface="gre1", download=40.0, speedtest_run=SPEEDTEST_RUN + 60)
     finished["uplink"]["speedtest_lastrun"] = SPEEDTEST_RUN
     finished["uplink"]["xput_down"] = 949.0
     await console.push(hass, sync(finished))
-    download = hass.states.get("sensor.gateway_speed_test_download")
-    assert download.state == "40.0"  # type: ignore[union-attr]
-    assert download.attributes["uplink"] == "wan_lte_failover"  # type: ignore[union-attr]
-    assert download.attributes["uplink_name"] == "LTE"  # type: ignore[union-attr]
-    last = hass.states.get("sensor.gateway_last_speed_test")
-    assert last.state == "2023-11-14T22:14:20+00:00"  # type: ignore[union-attr]
-    assert last.attributes["running"] is False  # type: ignore[union-attr]
+    speedtest = _speedtest(setup_entry)
+    assert (speedtest.download, speedtest.running) == (40.0, False)
+    assert _speedtest_uplink(setup_entry) == "wan_lte_failover"
+    assert speedtest.last_run == datetime(2023, 11, 14, 22, 14, 20, tzinfo=dt_util.UTC)
     assert setup_entry.data[CONF_SPEEDTEST_UPLINK] == {
         "last_run": "2023-11-14T22:14:20+00:00",
         "uplink": "WAN_LTE_FAILOVER",
@@ -533,8 +493,7 @@ async def test_speedtest_over_the_backup_shows_at_once(
     # A little later the gateway no longer names the interface; the result keeps its uplink
     console.set_gateway(gateway(interface=None, download=40.0, speedtest_run=SPEEDTEST_RUN + 60))
     await _poll(hass, setup_entry)
-    download = hass.states.get("sensor.gateway_speed_test_download")
-    assert download.attributes["uplink"] == "wan_lte_failover"  # type: ignore[union-attr]
+    assert _speedtest_uplink(setup_entry) == "wan_lte_failover"
 
 
 async def test_speedtest_uplink_is_the_active_one_when_not_named(
@@ -549,25 +508,21 @@ async def test_speedtest_uplink_is_the_active_one_when_not_named(
         transition=TRANSITION + 1000,
     )
     await console.push(hass, sync(over_backup))
-    download = hass.states.get("sensor.gateway_speed_test_download")
-    assert download.attributes["uplink"] == "wan_lte_failover"  # type: ignore[union-attr]
+    assert _speedtest_uplink(setup_entry) == "wan_lte_failover"
     # Back on the preferred uplink, the result keeps its uplink
     back = gateway(interface=None, speedtest_run=SPEEDTEST_RUN + 60, transition=TRANSITION + 2000)
     await console.push(hass, sync(back))
     assert _state(hass, ACTIVE) == "wan"
-    download = hass.states.get("sensor.gateway_speed_test_download")
-    assert download.attributes["uplink"] == "wan_lte_failover"  # type: ignore[union-attr]
+    assert _speedtest_uplink(setup_entry) == "wan_lte_failover"
     # An interface the gateway names later wins
     console.set_gateway(gateway(interface="eth8", speedtest_run=SPEEDTEST_RUN + 60))
     await _poll(hass, setup_entry)
-    download = hass.states.get("sensor.gateway_speed_test_download")
-    assert download.attributes["uplink"] == "wan"  # type: ignore[union-attr]
+    assert _speedtest_uplink(setup_entry) == "wan"
     # A result seen while no uplink is known stays without one
     nowhere = gateway(interface=None, speedtest_run=SPEEDTEST_RUN + 120, wan="odd", lte="odd")
     nowhere["uplink"]["comment"] = "nowhere"
     await console.push(hass, sync(nowhere))
-    download = hass.states.get("sensor.gateway_speed_test_download")
-    assert download.attributes["uplink"] is None  # type: ignore[union-attr]
+    assert _speedtest_uplink(setup_entry) is None
 
 
 @pytest.mark.parametrize(
@@ -598,8 +553,7 @@ async def test_speedtest_uplink_survives_a_restart(
     )
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    download = hass.states.get("sensor.gateway_speed_test_download")
-    assert download.attributes["uplink"] == expected  # type: ignore[union-attr]
+    assert _speedtest_uplink(config_entry) == expected
 
 
 async def test_push_of_lte_state(
@@ -648,11 +602,10 @@ async def test_clients_not_readable(
     setup_entry: MockConfigEntry,
     console: FakeConsole,
 ) -> None:
-    """Without the clients endpoint the VPN sensor is unknown; the uplinks stay available."""
+    """Without the clients endpoint the remote clients are unknown; the uplinks stay available."""
     console.clients_error = NetworkError("no such endpoint")
     await _poll(hass, setup_entry)
-    assert _state(hass, VPN) == STATE_UNKNOWN
-    assert hass.states.get(VPN).attributes["clients"] == []  # type: ignore[union-attr]
+    assert setup_entry.runtime_data.coordinator.data.vpn_clients is None
     assert _state(hass, WAN) == "on"
     # A rejected login on the clients endpoint counts like any other
     console.clients_error = NetworkAuthError("no")
@@ -756,7 +709,7 @@ async def test_poll_requests_run_together(
     await poll
     await hass.async_block_till_done()
     assert _state(hass, WAN) == "on"
-    assert _state(hass, VPN) == STATE_UNKNOWN
+    assert setup_entry.runtime_data.coordinator.data.vpn_clients is None
 
 
 async def test_unexpected_poll_errors(
@@ -904,31 +857,18 @@ async def test_brief_failover_waits_for_a_switch_to_follow(
     assert hass.states.get(EVENT).attributes["event_type"] == "brief_failover"  # type: ignore[union-attr]
 
 
-LINK_SPEED = "sensor.gateway_cable_link_speed"
 LINK_SLOW = "binary_sensor.gateway_cable_link_slower_than_expected"
 SIM = "binary_sensor.lte_backup_sim_problem"
 
 
-async def test_link_speed_sensor(
+async def test_link_speed_without_expectation(
     hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
 ) -> None:
-    """The WAN port's negotiated speed is a diagnostic sensor; the LTE uplink has none."""
-    speed = hass.states.get(LINK_SPEED)
-    assert speed.state == "2500"  # type: ignore[union-attr]
-    assert speed.attributes["full_duplex"] is True  # type: ignore[union-attr]
-    assert speed.attributes["unit_of_measurement"] == "Mbit/s"  # type: ignore[union-attr]
-    registry = er.async_get(hass)
-    assert registry.async_get(LINK_SPEED).entity_category == er.EntityCategory.DIAGNOSTIC  # type: ignore[union-attr]
-    assert (
-        registry.async_get_entity_id("sensor", DOMAIN, f"{MAC}_link_speed_wan_lte_failover") is None
-    )
-    # Without an expected speed there is no "slower than expected" sensor
+    """Without an expected speed there is no sensor; the page shows the negotiated speed."""
     assert hass.states.get(LINK_SLOW) is None
-    # A renegotiated link shows at once through the websocket
     await console.push(hass, sync(gateway(speed=1000, duplex=False)))
-    assert _state(hass, LINK_SPEED) == "1000"
-    await console.push(hass, sync(gateway(up=False)))
-    assert _state(hass, LINK_SPEED) == STATE_UNKNOWN
+    uplink = setup_entry.runtime_data.coordinator.data.uplinks["WAN"]
+    assert (uplink.link_speed, uplink.full_duplex) == (1000, False)
 
 
 async def test_link_slower_than_expected(

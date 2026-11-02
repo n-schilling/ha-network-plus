@@ -1,4 +1,4 @@
-"""Tests for the speed test event and its logbook entry."""
+"""Tests for the speed test and drill events and their logbook entries."""
 
 from __future__ import annotations
 
@@ -8,17 +8,10 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry, async_
 
 from homeassistant.core import Event, HomeAssistant
 
-from custom_components.network_plus.const import DOMAIN, EVENT_SPEEDTEST
+from custom_components.network_plus.const import DOMAIN, EVENT_DRILL, EVENT_SPEEDTEST
 from custom_components.network_plus.logbook import async_describe_events
 
 from .conftest import SPEEDTEST_RUN, FakeConsole, gateway, sync
-
-SENSORS = (
-    "sensor.gateway_speed_test_download",
-    "sensor.gateway_speed_test_upload",
-    "sensor.gateway_speed_test_ping",
-    "sensor.gateway_last_speed_test",
-)
 
 
 async def _poll(hass: HomeAssistant, entry: MockConfigEntry) -> None:
@@ -26,10 +19,10 @@ async def _poll(hass: HomeAssistant, entry: MockConfigEntry) -> None:
     await hass.async_block_till_done()
 
 
-async def test_new_result_fires_the_event_and_the_sensors_share_its_context(
+async def test_new_result_fires_the_event(
     hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
 ) -> None:
-    """A finished test is an event; the sensors' new states carry its context."""
+    """A finished test is an event, once per run."""
     events = async_capture_events(hass, EVENT_SPEEDTEST)
     # The result found at setup is no news
     await _poll(hass, setup_entry)
@@ -47,24 +40,15 @@ async def test_new_result_fires_the_event_and_the_sensors_share_its_context(
         "uplink": "wan_lte_failover",
         "uplink_name": "LTE",
     }
-    for entity_id in SENSORS:
-        state = hass.states.get(entity_id)
-        assert state is not None, entity_id
-        assert state.context.id == events[0].context.id, entity_id
-    # An interface named later for the same run is no new result, and the
-    # sensors' next writes carry no stale context
+    # An interface named later for the same run is no new result
     console.set_gateway(gateway(interface="eth8", download=40.0, speedtest_run=SPEEDTEST_RUN + 60))
     await _poll(hass, setup_entry)
     assert len(events) == 1
-    download = hass.states.get("sensor.gateway_speed_test_download")
-    assert download.attributes["uplink"] == "wan"  # type: ignore[union-attr]
     # A result seen by the poll is announced as well, with the active uplink
     console.set_gateway(gateway(interface=None, download=30.0, speedtest_run=SPEEDTEST_RUN + 120))
     await _poll(hass, setup_entry)
     assert len(events) == 2
     assert (events[1].data["download"], events[1].data["uplink_name"]) == (30.0, "Cable")
-    last = hass.states.get("sensor.gateway_last_speed_test")
-    assert last.context.id == events[1].context.id  # type: ignore[union-attr]
 
 
 async def test_result_seen_at_setup_is_not_announced(
@@ -102,3 +86,31 @@ def test_describe_speedtest_event() -> None:
     }
     sparse = describe(Event(EVENT_SPEEDTEST, {"download": "fast", "upload": None, "ping": True}))
     assert sparse == {"name": "Network Plus", "message": ""}
+
+
+def test_describe_drill_event() -> None:
+    """The entry's name carries the gateway and the drill's results; missing ones are left out."""
+    described: dict[str, Any] = {}
+
+    def register(domain: str, event_type: str, describe: Any) -> None:
+        described[(domain, event_type)] = describe
+
+    async_describe_events(None, register)  # type: ignore[arg-type]
+    describe = described[(DOMAIN, EVENT_DRILL)]
+    full = describe(
+        Event(
+            EVENT_DRILL,
+            {
+                "gateway": "Gateway",
+                "failover_seconds": 47.3,
+                "restore_seconds": 9.6,
+                "data_used_bytes": 31_000_000,
+            },
+        )
+    )
+    assert full == {
+        "name": "Gateway \u00b7 \u21c4 \u00b7 \u2192 47 s \u00b7 \u2190 10 s \u00b7 31 MB",
+        "message": "",
+    }
+    sparse = describe(Event(EVENT_DRILL, {"failover_seconds": 15, "restore_seconds": None}))
+    assert sparse == {"name": "Network Plus \u00b7 \u21c4 \u00b7 \u2192 15 s", "message": ""}

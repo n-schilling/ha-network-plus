@@ -8,10 +8,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, time, timedelta, tzinfo
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import CALLBACK_TYPE, Context, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import (
     ConfigEntryAuthFailed,
     HomeAssistantError,
@@ -45,6 +45,7 @@ from .const import (
     DEFAULT_LTE_BILLING_DAY,
     DEFAULT_LTE_LIMIT_PERCENT,
     DOMAIN,
+    EVENT_DRILL,
     EVENT_SPEEDTEST,
     FAILOVER_TIMEOUT,
     FALLBACK_WAN_TYPE,
@@ -85,6 +86,9 @@ from .model import (
     parse_state,
 )
 
+if TYPE_CHECKING:
+    from .history import History
+
 _LOGGER = logging.getLogger(__name__)
 
 # Websocket messages with device runtime objects: a sync carries the whole
@@ -100,6 +104,7 @@ class RuntimeData:
     client: NetworkClient
     coordinator: NetworkCoordinator
     gateway_device_id: str
+    history: History
     admin_client: NetworkClient | None = None  # only with the admin opt-in
 
 
@@ -162,10 +167,6 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self.drill = Drill.from_dict(entry.data.get(CONF_DRILL))
         # The uplink the last speed test ran over, by run time, as the entry stored it
         self._speedtest_uplink = _speedtest_uplink_from(entry.data.get(CONF_SPEEDTEST_UPLINK))
-        # The context of the event fired for the newest result, by run time; the
-        # speed test sensors write that result in it, so the logbook names the
-        # test as the cause of their state change
-        self.speedtest_context: tuple[datetime, Context] | None = None
         # The timer that switches the preferred uplink on again by itself
         self._unsub_auto_off: CALLBACK_TYPE | None = None
         # The running speed test over the backup uplink
@@ -644,9 +645,8 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
     def _announce_speedtest(
         self, speedtest: Speedtest, last_run: datetime, uplink: str, state: NetworkState
     ) -> None:
-        """Fire the event for a finished speed test and keep its context for the sensors."""
+        """Fire the event for a finished speed test: the logbook and the page take it from there."""
         named = state.uplinks.get(uplink)
-        context = Context()
         self.hass.bus.async_fire(
             EVENT_SPEEDTEST,
             {
@@ -659,9 +659,19 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
                 "uplink": uplink.lower(),
                 "uplink_name": named.name if named else uplink,
             },
-            context=context,
         )
-        self.speedtest_context = (last_run, context)
+
+    @callback
+    def _announce_drill(self, drill: Drill) -> None:
+        """Fire the event for a completed drill; the logbook and the page take it from there."""
+        self.hass.bus.async_fire(
+            EVENT_DRILL,
+            {
+                "entry_id": self.config_entry.entry_id,
+                "gateway": self.config_entry.title,
+                **drill.event_attributes(),
+            },
+        )
 
     @callback
     def note_admin_permission(self, allowed: bool, reason: str = "") -> None:
@@ -758,6 +768,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
                 self._save_drill(drill)
                 if drill.completed:
                     events.append(UplinkEvent(EVENT_DRILL_COMPLETED, drill.event_attributes()))
+                    self._announce_drill(drill)
         # None before the first refresh, although the type says otherwise
         previous: NetworkState | None = self.data
         if previous is not None:

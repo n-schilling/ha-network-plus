@@ -2,6 +2,22 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-11-02
+
+### Added
+
+- A page of its own, **Network Plus** in the sidebar, for administrators: the uplinks with their state, latency, availability, negotiated link speed against the expected one and public addresses, the LTE backup with its data plan and signal, the history of failovers, returns, brief failovers, uplinks going down and up and new public addresses, the speed tests per uplink with a chart, every backup drill with its times and data, and the remote sessions. It reads a WebSocket command `network_plus/overview` every 30 seconds while open.
+- The history is kept per console in a store of its own, not in the recorder, for 365 days (new option *Keep history*); backup drills stay. It starts with this version.
+- A completed backup drill is an entry in the activity, like a speed test, and fires the bus event `network_plus_drill`.
+
+### Removed
+
+- The sensors for the speed test (download, upload, ping, last speed test), the backup drill (last drill, failover time, restore time, data used), the last LTE failover, the VPN clients, the link speed per uplink, and the disabled sensors for latency, availability, IPv4 and IPv6 per uplink. Their values are on the page; the speed test result is also in the event `network_plus_speedtest`, the drill in `drill_completed`. Remove the leftover entities under Settings → Entities (they show as "not provided").
+
+### Fixed
+
+- Saving the options while the console could not be reached deleted the expected link speeds, because the form could not show them; they are now kept.
+
 ## [0.7.2] - 2026-10-24
 
 ### Changed

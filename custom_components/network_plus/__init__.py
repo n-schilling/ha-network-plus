@@ -11,15 +11,32 @@ from aiohttp import DummyCookieJar
 
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr, issue_registry as ir
+from homeassistant.helpers import (
+    config_validation as cv,
+    device_registry as dr,
+    issue_registry as ir,
+)
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.typing import ConfigType
 
 from .api import NetworkAuthError, NetworkClient, NetworkError
-from .const import CONF_ADMIN_PASSWORD, CONF_ADMIN_USERNAME, CONF_USE_ADMIN, DOMAIN
+from .const import (
+    CONF_ADMIN_PASSWORD,
+    CONF_ADMIN_USERNAME,
+    CONF_HISTORY_DAYS,
+    CONF_USE_ADMIN,
+    DEFAULT_HISTORY_DAYS,
+    DOMAIN,
+)
 from .coordinator import NetworkConfigEntry, NetworkCoordinator, RuntimeData
 from .entity import gateway_device_info
+from .frontend import async_register_frontend, async_unregister_panel
+from .history import History
+from .websocket import async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
+
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
@@ -28,6 +45,12 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.SWITCH,
 ]
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the WebSocket command of the page."""
+    async_register_websocket(hass)
+    return True
 
 
 def create_client(hass: HomeAssistant, data: dict[str, object]) -> NetworkClient:
@@ -70,10 +93,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> b
         config_entry_id=entry.entry_id,
         **gateway_device_info(coordinator.data.gateway, entry.title),
     )
+    history = History(
+        hass, entry.entry_id, int(entry.options.get(CONF_HISTORY_DAYS, DEFAULT_HISTORY_DAYS))
+    )
+    await history.async_load()
+    # Unload runs these last first: the history stops listening, then writes
+    entry.async_on_unload(history.async_flush)
+    entry.async_on_unload(history.attach(coordinator))
     entry.runtime_data = RuntimeData(
         client=client,
         coordinator=coordinator,
         gateway_device_id=device.id,
+        history=history,
         admin_client=admin_client,
     )
     if admin_client is not None:
@@ -82,6 +113,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> b
         coordinator.arm_auto_off_after_restart()
         entry.async_on_unload(coordinator.cancel_auto_off)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    await async_register_frontend(hass)
     entry.async_create_background_task(hass, coordinator.async_listen(), "network_plus websocket")
     return True
 
@@ -105,7 +137,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> 
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> None:
-    """Drop the repair issues of a console that was removed."""
+    """Drop the history and the repair issues of a console that was removed.
+
+    The page goes with the last console.
+    """
+    await History(hass, entry.entry_id, DEFAULT_HISTORY_DAYS).async_remove()
+    if not hass.config_entries.async_entries(DOMAIN):
+        async_unregister_panel(hass)
     registry = ir.async_get(hass)
     for domain, issue_id in list(registry.issues):
         if domain == DOMAIN and issue_id.endswith(entry.entry_id):
