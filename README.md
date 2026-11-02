@@ -68,11 +68,20 @@ If the console has an LTE backup device, it gets a device of its own below the g
 
 **Network Plus** in the sidebar, for administrators. It shows one console at a time (a choice in the toolbar when there are several) and reads it again every 30 seconds while it is open:
 
+![The Uplinks tab: the gateway's summary, the main uplink, the LTE uplink and the LTE backup's data plan](https://raw.githubusercontent.com/n-schilling/ha-network-plus/main/docs/images/uplinks.png)
+
+*All images show made-up data.*
+
 - **Uplinks**: the active uplink, latency, last switch, last speed test and last drill; per uplink its state, the gateway's latency and availability, the negotiated link speed against the expected one, port, connection type and public addresses; the LTE backup with data used against the plan and the signal.
 - **History**: failovers and returns with how long the backup carried the traffic, brief failovers, uplinks going down and up with how long they were gone, new public addresses (the uplink and the family, not the address).
 - **Speed tests**: download over time per uplink, and every result with upload and ping.
 - **Backup drills**: every drill with failover time, return time and LTE data, and the averages.
 - **Remote access**: the Teleport and VPN clients connected now, and the finished sessions.
+
+| ![The History tab: a failover to LTE and back, the uplink down and up again, new public addresses](https://raw.githubusercontent.com/n-schilling/ha-network-plus/main/docs/images/history.png) | ![The Speed tests tab: download over time per uplink and the results](https://raw.githubusercontent.com/n-schilling/ha-network-plus/main/docs/images/speedtests.png) |
+|---|---|
+
+![The Drills tab: every backup drill with failover time, return time, LTE data and the averages](https://raw.githubusercontent.com/n-schilling/ha-network-plus/main/docs/images/drills.png)
 
 The history is kept by the integration in a store of its own (`.storage/network_plus.history.<entry>`), not in the recorder, for 365 days (option *Keep history*, 1 to 3650 days); backup drills stay. It starts with the installation: nothing from before is shown. Removing the console removes its history.
 
