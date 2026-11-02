@@ -370,7 +370,7 @@ Three things need a hand and get a repair issue under Settings → Repairs; each
 
 - Only uplinks the gateway monitors get entities; a configured but unused WAN port has none.
 - The page shows the uplink port's address. Behind another router this is a private address.
-- The page's history starts with the installation of version 0.8.0 and is kept per console in Home Assistant's storage, not in the recorder; a backup of Home Assistant contains it.
+- The page's history starts with the installation and is kept per console in Home Assistant's storage, not in the recorder; a backup of Home Assistant contains it.
 - The only writes are the switch "Enforce backup uplink" and the two speed test buttons, and only with the admin opt-in. A speed test runs over the active uplink; the console offers no way to pick one, which is why the backup is measured by switching the preferred uplink off.
 - Remote clients are those the console lists as connected; of VPN servers only Teleport was tested.
 - Events are derived from state changes, not from the console's event log; packet loss and "failed multiple times" are not reported.
