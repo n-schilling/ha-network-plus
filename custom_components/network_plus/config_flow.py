@@ -30,6 +30,7 @@ from homeassistant.helpers.selector import (
 from . import create_client
 from .api import (
     NetworkAuthError,
+    NetworkCertificateError,
     NetworkClient,
     NetworkError,
     format_fingerprint,
@@ -44,6 +45,7 @@ from .const import (
     CONF_HISTORY_DAYS,
     CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
+    CONF_PIN_CERTIFICATE,
     CONF_USE_ADMIN,
     DEFAULT_AUTO_OFF_MINUTES,
     DEFAULT_HISTORY_DAYS,
@@ -81,12 +83,18 @@ class NotAdmin(Exception):
     """The user may not change the Network configuration."""
 
 
+class CertificateNotTrusted(Exception):
+    """The certificate check failed: no trusted chain, or not the pinned certificate."""
+
+
 def _connection_schema() -> probatio.Schema:
     return probatio.Schema(
         {
             probatio.Required(CONF_HOST): str,
             probatio.Required(CONF_USERNAME): str,
             probatio.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
+            probatio.Optional(CONF_VERIFY_SSL, default=True): bool,
+            probatio.Optional(CONF_PIN_CERTIFICATE, default=False): bool,
             probatio.Optional(CONF_USE_ADMIN, default=False): bool,
         }
     )
@@ -104,9 +112,10 @@ def _admin_schema() -> probatio.Schema:
 class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     """Add a UniFi OS console.
 
-    The certificate is always checked. A console whose certificate the system
-    does not trust (UniFi OS makes its own) gets the certificate pinned, once
-    an administrator has entered its fingerprint, compared with the console.
+    The certificate is checked against the system's trusted certificates by
+    default. Pinning is optional, for a console with a certificate of its own:
+    then the step "certificate" shows the fingerprint the console presents,
+    and an administrator enters it, compared with the console.
     """
 
     VERSION = 1
@@ -127,6 +136,8 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             raw = await client.get_gateway()
         except NetworkAuthError as err:
             raise InvalidAuth from err
+        except NetworkCertificateError as err:
+            raise CertificateNotTrusted from err
         except NetworkError as err:
             raise CannotConnect from err
         finally:
@@ -145,6 +156,8 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             errors["base"] = "invalid_auth"
         except NoGateway:
             errors["base"] = "no_gateway"
+        except CertificateNotTrusted:
+            errors["base"] = "certificate_not_trusted"
         return None
 
     def _known_fingerprint(self, host: str) -> str | None:
@@ -164,25 +177,29 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_connect(
         self, step: str, data: dict[str, Any]
     ) -> tuple[ConfigFlowResult | None, dict[str, str]]:
-        """Check the certificate, log in and go on; return the errors for the form of ``step``.
+        """Settle the certificate, log in and go on; return the errors for the form of ``step``.
 
-        A certificate the system does not trust and that was not confirmed
-        for this host leads to the step that asks for its fingerprint.
+        With pinning asked for, a fingerprint not confirmed for this host
+        before leads to the step that asks for it.
         """
-        data = {k: v for k, v in data.items() if k not in (CONF_CERT_FINGERPRINT, CONF_VERIFY_SSL)}
+        pin = bool(data.get(CONF_PIN_CERTIFICATE))
+        data = {
+            k: v for k, v in data.items() if k not in (CONF_CERT_FINGERPRINT, CONF_PIN_CERTIFICATE)
+        }
+        if not pin:
+            return await self._async_login(step, data)
         client = create_client(self.hass, data)
         try:
-            presented = await client.untrusted_fingerprint()
+            presented = await client.get_fingerprint()
         except NetworkError:
             return None, {"base": "cannot_connect"}
         finally:
             client.detach()
-        if presented is not None:
-            if presented != self._known_fingerprint(str(data[CONF_HOST])):
-                self._pending = (step, data)
-                self._presented = presented
-                return await self.async_step_certificate(), {}
-            data[CONF_CERT_FINGERPRINT] = presented
+        if presented != self._known_fingerprint(str(data[CONF_HOST])):
+            self._pending = (step, data)
+            self._presented = presented
+            return await self.async_step_certificate(), {}
+        data[CONF_CERT_FINGERPRINT] = presented
         return await self._async_login(step, data)
 
     async def _async_login(
@@ -200,11 +217,7 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_mismatch(reason="wrong_gateway")
         if step in ("reauth", "reauth_confirm"):
             entry = self._get_reauth_entry()
-            kept = {
-                k: v
-                for k, v in entry.data.items()
-                if k not in (CONF_CERT_FINGERPRINT, CONF_VERIFY_SSL)
-            }
+            kept = {k: v for k, v in entry.data.items() if k != CONF_CERT_FINGERPRINT}
             return self.async_update_reload_and_abort(entry, data={**kept, **data}), {}
         if step == "reconfigure":
             entry = self._get_reconfigure_entry()
@@ -261,7 +274,10 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors=errors,
             )
         suggested = {
-            k: v for k, v in values.items() if k in (CONF_HOST, CONF_USERNAME, CONF_USE_ADMIN)
+            k: v
+            for k, v in values.items()
+            if k
+            in (CONF_HOST, CONF_USERNAME, CONF_VERIFY_SSL, CONF_PIN_CERTIFICATE, CONF_USE_ADMIN)
         }
         return self.async_show_form(
             step_id=step,
@@ -343,6 +359,8 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         self._reconfigure = True
         if user_input is None:
             suggested = {k: v for k, v in entry.data.items() if k in (CONF_HOST, CONF_USERNAME)}
+            suggested[CONF_VERIFY_SSL] = bool(entry.data.get(CONF_VERIFY_SSL, True))
+            suggested[CONF_PIN_CERTIFICATE] = bool(entry.data.get(CONF_CERT_FINGERPRINT))
             suggested[CONF_USE_ADMIN] = bool(entry.data.get(CONF_USE_ADMIN))
             return self._async_show_step("reconfigure", {}, suggested)
         data = {**user_input, CONF_HOST: user_input[CONF_HOST].strip()}
@@ -353,24 +371,25 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         return result or self._async_show_step("reconfigure", errors, data)
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
-        """The console rejected the login of the read-only user, or its certificate changed.
+        """The console rejected the login of the read-only user, or its pinned certificate changed.
 
-        A changed certificate is asked for first; the password only if the
-        login fails after that.
+        With a pin, a changed certificate is asked for first; the password
+        only if the login fails after that.
         """
-        client = create_client(
-            self.hass, {k: v for k, v in entry_data.items() if k != CONF_CERT_FINGERPRINT}
-        )
-        try:
-            presented = await client.untrusted_fingerprint()
-        except NetworkError:
-            presented = None
-        finally:
-            client.detach()
-        if presented is not None and presented != entry_data.get(CONF_CERT_FINGERPRINT):
-            self._pending = ("reauth", dict(entry_data))
-            self._presented = presented
-            return await self.async_step_certificate()
+        pinned = entry_data.get(CONF_CERT_FINGERPRINT)
+        if pinned:
+            data = {k: v for k, v in entry_data.items() if k != CONF_CERT_FINGERPRINT}
+            client = create_client(self.hass, data)
+            try:
+                presented: str | None = await client.get_fingerprint()
+            except NetworkError:
+                presented = None
+            finally:
+                client.detach()
+            if presented is not None and presented != pinned:
+                self._pending = ("reauth", data)
+                self._presented = presented
+                return await self.async_step_certificate()
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
@@ -380,7 +399,11 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reauth_entry()
         if user_input is None:
             return self._async_show_step("reauth_confirm", {}, {})
-        data = {**entry.data, CONF_PASSWORD: user_input[CONF_PASSWORD]}
+        data = {
+            **entry.data,
+            CONF_PASSWORD: user_input[CONF_PASSWORD],
+            CONF_PIN_CERTIFICATE: bool(entry.data.get(CONF_CERT_FINGERPRINT)),
+        }
         result, errors = await self._async_connect("reauth_confirm", data)
         return result or self._async_show_step("reauth_confirm", errors, data)
 

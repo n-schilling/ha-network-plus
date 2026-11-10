@@ -119,10 +119,10 @@ async def session() -> AsyncIterator[ClientSession]:
 async def test_own_certificate_is_not_trusted(
     server: tuple[str, str, Console, Any], session: ClientSession
 ) -> None:
-    """Without a pin the console's own certificate fails, before any login."""
+    """With the check on and no pin the console's own certificate fails, before any login."""
     host, digest, console, _ = server
     client = NetworkClient(session, host, "user", "pass")
-    assert await client.untrusted_fingerprint() == digest
+    assert await client.get_fingerprint() == digest
     with pytest.raises(NetworkCertificateError) as err:
         await client.get_devices()
     assert err.value.fingerprint is None
@@ -137,7 +137,6 @@ async def test_trusted_certificate_needs_no_pin(server: tuple[str, str, Console,
         cookie_jar=DummyCookieJar(), connector=TCPConnector(ssl=trusting)
     ) as session:
         client = NetworkClient(session, host, "user", "pass")
-        assert await client.untrusted_fingerprint() is None
         assert (await client.get_devices())[0]["mac"] == gateway()["mac"]
 
 
@@ -169,10 +168,11 @@ async def test_unreachable(session: ClientSession, socket_enabled: None) -> None
     """A console that does not answer is no certificate problem."""
     client = NetworkClient(session, "127.0.0.1:9", "user", "pass")
     with pytest.raises(NetworkError) as err:
-        await client.untrusted_fingerprint()
-    assert not isinstance(err.value, NetworkCertificateError)
-    with pytest.raises(NetworkError):
         await client.get_fingerprint()
+    assert not isinstance(err.value, NetworkCertificateError)
+    with pytest.raises(NetworkError) as err:
+        await client.get_devices()
+    assert not isinstance(err.value, NetworkCertificateError)
 
 
 def test_fingerprint_formats() -> None:

@@ -246,8 +246,10 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   takes everything back; an unknown one leaves it, and the next poll or the
   timer finds out. The switch-back writes the remembered type whenever a
   start is remembered, whatever the last known state says, because after a
-  write of unknown outcome that state may be old; without a start it writes
-  nothing while the uplink is on, so no guessed type replaces a setting.
+  write of unknown outcome that state may be old. Without a start nothing is
+  written: an uplink switched off in the console is refused (its connection
+  type is known only there; a guessed DHCP would cut a PPPoE line), and
+  switching on refuses an uplink that is off already for the same reason.
 - A poll that shows the preferred uplink on, while no write and no backup
   measurement is going on, forgets the remembered start: someone switched it
   on in the console, or the console never took the write. A later restart
@@ -339,20 +341,23 @@ do not share them, and `async_remove_entry` drops them with the entry.
   detaches a session created during entry setup when the entry unloads, also
   after a failed setup; the entry registers the detach as well so it is
   visible, and the config flow detaches its own after each check.
-- **The certificate is always checked.** Consoles ship with a certificate of
-  their own that no system trusts. Instead of a switch to turn the check off
-  the config flow pins it: `untrusted_fingerprint()` tries a verified
-  connection first; if that fails on the certificate, it reads the SHA-256
-  fingerprint by connecting with a fingerprint that cannot match (aiohttp's
-  `ServerFingerprintMismatch` carries the real one; nothing is sent). An
-  administrator enters the fingerprint, compared with the console; every
-  request, the login and the websocket then go with `ssl=Fingerprint(...)`.
-  A changed certificate is a `NetworkCertificateError`: the poll raises
-  `ConfigEntryAuthFailed` at once and logs the new fingerprint; the reauth
-  flow asks for it first and for the password only if the login then fails.
-  Entries from a version with the switch off pin the presented certificate
-  at their first setup (never less safe than before, logged with the
-  fingerprint); with the switch on, the key is just dropped.
+- **Certificate: checked by default, pinning optional.** The option
+  *Verify the certificate* (on by default) decides with the system's trusted
+  certificates; a console with a publicly trusted certificate (Let's Encrypt
+  for its host name, renewed every 90 days) is verified like any web server.
+  Pinning is an opt-in for a console's self-made certificate: the config
+  flow reads the SHA-256 fingerprint by connecting with a fingerprint that
+  cannot match (aiohttp's `ServerFingerprintMismatch` carries the real one;
+  nothing is sent), an administrator enters it, compared with the console,
+  and every request, the login and the websocket then go with
+  `ssl=Fingerprint(...)`. A pinned certificate that changes is a
+  `NetworkCertificateError` with the new fingerprint: the poll raises
+  `ConfigEntryAuthFailed` at once and logs it; the reauth flow asks for the
+  certificate first and for the password only if the login then fails. A
+  certificate the check rejects without a pin is a connection error. Pinning
+  is never set up by itself, also not on an update: a renewed public
+  certificate would then break the entry. Off without a pin takes any
+  certificate; the option text says what that means.
 - **No thresholds in code.** "Internet latency" is one series across
   failovers; a threshold helper or an automation decides what is slow. The
   integration sends no notifications.

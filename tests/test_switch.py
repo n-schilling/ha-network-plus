@@ -606,3 +606,33 @@ async def test_timer_without_anything_enforced(
     async_fire_time_changed(hass)
     await hass.async_block_till_done()
     assert console.writes == []
+
+
+async def test_switched_off_in_the_console_is_not_guessed(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """Off in the console without a start here: only the console knows the type to restore."""
+    console.configs[0]["wan_type"] = "disabled"
+    await _poll(hass, setup_admin_entry)
+    assert hass.states.get(SWITCH).state == STATE_ON  # type: ignore[union-attr]
+    with pytest.raises(HomeAssistantError, match="switched off in the console"):
+        await _turn(hass, SERVICE_TURN_OFF)
+    with pytest.raises(ServiceValidationError, match="switched off in the console"):
+        await _turn(hass, SERVICE_TURN_ON)
+    assert console.writes == []
+    assert CONF_ENFORCED_AT not in setup_admin_entry.data
+
+
+async def test_remembered_start_without_type_is_not_guessed(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A start without its type (an entry edited by hand) writes nothing either."""
+    console.configs[0]["wan_type"] = "disabled"
+    hass.config_entries.async_update_entry(
+        setup_admin_entry,
+        data={**setup_admin_entry.data, CONF_ENFORCED_AT: dt_util.utcnow().isoformat()},
+    )
+    await _poll(hass, setup_admin_entry)
+    with pytest.raises(HomeAssistantError, match="switched off in the console"):
+        await _turn(hass, SERVICE_TURN_OFF)
+    assert console.writes == []

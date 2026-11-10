@@ -110,7 +110,7 @@ class NetworkClient:
         """Initialize the client; ``session`` should keep no cookies, the client sends the token.
 
         With ``fingerprint`` (SHA-256, hex) the console's certificate must be
-        exactly that one; without, it must have a chain the system trusts.
+        exactly that one; without, the session's certificate check applies.
         """
         self._session = session
         self._ssl: Fingerprint | bool = (
@@ -342,20 +342,6 @@ class NetworkClient:
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             raise NetworkError(f"networkconf {network_id}: unexpected answer")
         return data[0]
-
-    async def untrusted_fingerprint(self) -> str | None:
-        """Return None if the system trusts the console's certificate, else its fingerprint.
-
-        The fingerprint is the SHA-256 one, as hex, of the certificate the
-        console presents; it is for an administrator to confirm.
-        """
-        try:
-            async with self._session.get(f"{self._base}/", timeout=TIMEOUT, ssl=True):
-                return None
-        except ClientConnectorCertificateError:
-            return await self.get_fingerprint()
-        except (ClientError, TimeoutError) as err:
-            raise NetworkError(_describe(err)) from err
 
     async def get_fingerprint(self) -> str:
         """Return the SHA-256 fingerprint of the certificate the console presents, as hex.

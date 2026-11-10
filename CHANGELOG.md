@@ -6,7 +6,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ### Changed
 
-- **The certificate of the console is always checked; the option "Verify the certificate" is gone.** A console with its own certificate (as UniFi OS makes one) gets it pinned: setup shows its SHA-256 fingerprint and asks to enter it, compared with the console. A changed certificate is never taken by itself: the entities become unavailable, the log names the new fingerprint and Home Assistant asks again. An entry that had the check off pins the certificate the console presents at the first start after the update and logs its fingerprint; compare it, and use Reconfigure if it is not the console's.
+- **Optional certificate pinning** for a console with a certificate of its own (self-signed): *Pin the certificate* shows its SHA-256 fingerprint in a second step and asks to enter it, compared with the console. From then on only that certificate is accepted; a changed one is never taken by itself: the entities become unavailable, the log names the new fingerprint and Home Assistant asks again. Off by default, and not for a certificate that is renewed regularly (Let's Encrypt every 90 days). *Verify the certificate* stays as it was (on by default) and now says what turning it off means. Existing entries keep their settings; nothing is pinned on the update.
 - The switch "Enforce backup uplink" and the two speed test buttons are for administrators of Home Assistant only, like the page; automations and scripts may still use them. A user without administrator rights gets an error.
 - The addresses of the event `public_ip_changed` (`address`, `previous`) reach automations but are no longer kept by the recorder, the logbook or backups.
 - "Enforce backup uplink" refuses near the data plan also while the console's data limit is turned off, by the plan size the console still reports.
@@ -17,6 +17,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 - The uplink could stay off when the console took "Enforce backup uplink" but its answer or the check after it failed (a timeout, a server error): the timer to switch back is now armed before the write, and the speed test over the backup switches back in that case too.
 - At the end of the set time the uplink stayed off when its state was not known at that moment; it is now switched on all the same.
+- An uplink switched off in UniFi Network, not by Network Plus, was switched on again with a guessed connection type (DHCP) when the switch was turned off in Home Assistant, which cut a PPPoE line. The switch now refuses and says to switch it on in UniFi Network; switching on refuses an uplink that is off already for the same reason.
 - Withdrawing the admin features while the backup was enforced left the uplink off for good; Reconfigure now refuses that until the switch is off.
 - An attempt the console refused, or an uplink switched on again in UniFi Network, left the start behind: the switch showed old times, and a later restart could switch the uplink on against a setting made in the console. The start is now forgotten in both cases, and the switch shows its times only while on.
 - A reload during a speed test over the backup switches the uplink on before the sessions close, instead of failing and waiting for the timer.

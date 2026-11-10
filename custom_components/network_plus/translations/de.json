@@ -7,27 +7,35 @@
           "host": "Host",
           "username": "Benutzername",
           "password": "Passwort",
+          "verify_ssl": "Zertifikat prüfen",
+          "pin_certificate": "Zertifikat anpinnen",
           "use_admin": "Admin-Funktionen nutzen"
         },
         "data_description": {
           "host": "IP-Adresse oder Hostname der Konsole, zum Beispiel 192.168.1.1.",
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
+          "verify_ssl": "Standardmäßig an: Das Zertifikat der Konsole braucht eine Kette, der das System vertraut, wie bei einem öffentlich vertrauenswürdigen Zertifikat (zum Beispiel Let's Encrypt für den Hostnamen der Konsole). Aus wird jedes Zertifikat angenommen: Dann könnte sich jedes Gerät im Netz als Konsole ausgeben und bekäme die Passwörter, auch das Admin-Passwort. Ein Zertifikat, das die Konsole selbst erstellt hat, besser anpinnen.",
+          "pin_certificate": "Für eine Konsole mit eigenem (selbstsigniertem) Zertifikat: Der nächste Schritt zeigt seinen Fingerabdruck, du vergleichst und gibst ihn ein, und danach wird nur dieses Zertifikat angenommen. Nicht für ein Zertifikat, das regelmäßig erneuert wird (Let's Encrypt alle 90 Tage): Jede Erneuerung würde erneut fragen.",
           "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet, und die Tasten „Speedtest starten“ und „Speedtest über Backup-Leitung“. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
       "reconfigure": {
-        "description": "Adresse, Benutzer oder Admin-Zugang ändern.",
+        "description": "Adresse, Benutzer, Zertifikatsprüfung oder Admin-Zugang ändern.",
         "data": {
           "host": "Host",
           "username": "Benutzername",
           "password": "Passwort",
+          "verify_ssl": "Zertifikat prüfen",
+          "pin_certificate": "Zertifikat anpinnen",
           "use_admin": "Admin-Funktionen nutzen"
         },
         "data_description": {
           "host": "IP-Adresse oder Hostname der Konsole, zum Beispiel 192.168.1.1.",
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
+          "verify_ssl": "Standardmäßig an: Das Zertifikat der Konsole braucht eine Kette, der das System vertraut, wie bei einem öffentlich vertrauenswürdigen Zertifikat (zum Beispiel Let's Encrypt für den Hostnamen der Konsole). Aus wird jedes Zertifikat angenommen: Dann könnte sich jedes Gerät im Netz als Konsole ausgeben und bekäme die Passwörter, auch das Admin-Passwort. Ein Zertifikat, das die Konsole selbst erstellt hat, besser anpinnen.",
+          "pin_certificate": "Für eine Konsole mit eigenem (selbstsigniertem) Zertifikat: Der nächste Schritt zeigt seinen Fingerabdruck, du vergleichst und gibst ihn ein, und danach wird nur dieses Zertifikat angenommen. Nicht für ein Zertifikat, das regelmäßig erneuert wird (Let's Encrypt alle 90 Tage): Jede Erneuerung würde erneut fragen.",
           "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet, und die Tasten „Speedtest starten“ und „Speedtest über Backup-Leitung“. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
@@ -42,7 +50,7 @@
       },
       "certificate": {
         "title": "Zertifikat der Konsole",
-        "description": "Die Konsole unter {host} zeigt ein Zertifikat, dem das System nicht vertraut; eine UniFi-OS-Konsole erstellt sich eines selbst. Sein SHA-256-Fingerabdruck ist:\n\n`{fingerprint}`\n\nVergleiche ihn mit dem Zertifikat, das die Konsole zeigt, zum Beispiel im Browser unter der Adresse der Konsole (Schloss- oder Warnsymbol in der Adresszeile → Zertifikatdetails), und gib ihn unten ein. Home Assistant nimmt dann nur noch dieses Zertifikat an; ändert es sich, wirst du erneut gefragt.",
+        "description": "Die Konsole unter {host} zeigt ein Zertifikat mit diesem SHA-256-Fingerabdruck:\n\n`{fingerprint}`\n\nVergleiche ihn mit dem Zertifikat, das die Konsole zeigt, zum Beispiel im Browser unter der Adresse der Konsole (Schloss- oder Warnsymbol in der Adresszeile → Zertifikatdetails), und gib ihn unten ein. Home Assistant nimmt dann nur noch dieses Zertifikat an; ändert es sich, wirst du erneut gefragt.",
         "data": {
           "certificate_fingerprint": "SHA-256-Fingerabdruck"
         },
@@ -70,7 +78,8 @@
       "admin_invalid_auth": "Die Konsole hat die Admin-Zugangsdaten abgelehnt.",
       "not_admin": "Dieser Benutzer darf die Network-Konfiguration nicht ändern. Er braucht die Admin-Rolle für die Network-Anwendung.",
       "fingerprint_mismatch": "Das ist nicht der Fingerabdruck des Zertifikats, das die Konsole zeigt. Wenn er richtig abgeschrieben ist, antwortet unter dieser Adresse ein anderes Gerät.",
-      "backup_enforced": "Die Backup-Leitung ist gerade erzwungen. Schalte „Backup-Leitung erzwingen“ zuerst aus; ohne Admin-Zugang könnte nichts die bevorzugte Leitung wieder einschalten."
+      "backup_enforced": "Die Backup-Leitung ist gerade erzwungen. Schalte „Backup-Leitung erzwingen“ zuerst aus; ohne Admin-Zugang könnte nichts die bevorzugte Leitung wieder einschalten.",
+      "certificate_not_trusted": "Dem Zertifikat der Konsole wird nicht vertraut. Ein Zertifikat, das die Konsole selbst erstellt hat, anpinnen („Zertifikat anpinnen“); sonst den Hostnamen prüfen, für den das Zertifikat gilt."
     },
     "abort": {
       "already_configured": "Dieses Gateway ist schon eingerichtet.",
@@ -197,10 +206,13 @@
       "message": "Die Konsole hat den Speedtest nicht gestartet: {error}"
     },
     "certificate_not_trusted": {
-      "message": "Dem Zertifikat der Konsole wird nicht vertraut ({error}). Bestätige das Zertifikat über die Reparatur in den Einstellungen."
+      "message": "Die Konsole zeigt ein anderes Zertifikat als das angepinnte ({error}). Bestätige das neue Zertifikat über die Reparatur in den Einstellungen."
     },
     "console_write_unknown": {
       "message": "Die Konsole hat die Änderung nicht bestätigt ({error}); ob sie übernommen wurde, zeigt der Schalter innerhalb einer Minute."
+    },
+    "switched_off_in_console": {
+      "message": "Die bevorzugte Leitung wurde in der Konsole abgeschaltet, nicht hier; ihr Anschlusstyp ist nur dort bekannt. Schalte sie in UniFi Network wieder ein."
     }
   },
   "options": {

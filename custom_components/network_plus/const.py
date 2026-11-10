@@ -18,10 +18,12 @@ UPDATE_INTERVAL: Final = timedelta(seconds=60)
 RECONNECT_MIN: Final = 5.0
 RECONNECT_MAX: Final = 300.0
 
-# The SHA-256 fingerprint of the console's own certificate, as hex, pinned once
-# an administrator confirmed it; without it the certificate needs a chain the
-# system trusts. The certificate is always checked.
+# Optional: the SHA-256 fingerprint of the console's own certificate, as hex,
+# pinned once an administrator entered it. With it only that certificate is
+# taken; without it the certificate check (on by default) decides. The form
+# asks with "pin_certificate", which is not stored.
 CONF_CERT_FINGERPRINT: Final = "certificate_fingerprint"
+CONF_PIN_CERTIFICATE: Final = "pin_certificate"
 
 # Admin features: an explicit opt-in with its own credentials, kept apart
 # from the read-only ones. Without them the integration never writes.
@@ -55,8 +57,6 @@ LTE_REPORTS_MAX_AGE: Final = timedelta(hours=1)
 
 # The WAN type the console uses for an uplink that is switched off
 WAN_TYPE_DISABLED: Final = "disabled"
-# The WAN type to restore when none was recorded (a console freshly set up)
-FALLBACK_WAN_TYPE: Final = "dhcp"
 
 # Waiting times of the speed test over the backup uplink, in seconds: live,
 # the failover took about 15 s and a speed test well under a minute

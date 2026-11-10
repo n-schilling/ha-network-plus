@@ -51,7 +51,6 @@ from .const import (
     EVENT_DRILL,
     EVENT_SPEEDTEST,
     FAILOVER_TIMEOUT,
-    FALLBACK_WAN_TYPE,
     ISSUE_ADMIN,
     ISSUE_LTE_LIMIT,
     ISSUE_UNREACHABLE,
@@ -415,8 +414,8 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
 
     @property
     def restore_type(self) -> str:
-        """Return the WAN type to restore."""
-        return str(self.config_entry.data.get(CONF_ENFORCED_WAN_TYPE) or FALLBACK_WAN_TYPE)
+        """Return the remembered WAN type to restore; "" if none is remembered."""
+        return str(self.config_entry.data.get(CONF_ENFORCED_WAN_TYPE) or "")
 
     @property
     def enforced_at(self) -> datetime | None:
@@ -433,8 +432,14 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         """
         primary = self._check_enforceable()
         previous = primary.wan_type if primary.wan_type != WAN_TYPE_DISABLED else None
+        restore = previous or self.restore_type
+        if not restore:
+            # Off already, switched off in the console: its type is not known here
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="switched_off_in_console"
+            )
         drill_before = self.drill
-        self._remember_enforced(previous or self.restore_type, dt_util.utcnow())
+        self._remember_enforced(restore, dt_util.utcnow())
         # The drill protocol: the failover and the return are timed from here;
         # a failover seen during the write already counts
         self.start_drill()
@@ -454,7 +459,8 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
 
         With a remembered start the remembered type is written, whatever the
         last known state says: after a write of unknown outcome that state may
-        be old. Without one, nothing is written while the uplink is on.
+        be old. Without one nothing is written: the uplink is on already, or
+        it was switched off in the console and only the console knows its type.
         """
         primary = self.primary_uplink
         if primary is None:
@@ -467,10 +473,20 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
                 return
             if enforced is None:
                 raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_wan_config")
+            # Switched off in the console, not here: its type is not known, and
+            # a guessed one (for example DHCP on a PPPoE line) would cut the line
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="switched_off_in_console"
+            )
+        restore = self.restore_type
+        if not restore:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="switched_off_in_console"
+            )
         # The return is timed from the switch-back, so note it before the write
         self.end_drill()
         try:
-            await self.async_set_wan_type(primary.key, self.restore_type)
+            await self.async_set_wan_type(primary.key, restore)
         except HomeAssistantError:
             # The timer stays armed: it tries again later
             self.reopen_drill()
@@ -577,10 +593,10 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         """Switch back after the configured time; if that fails, try again in a minute.
 
         With a remembered start the uplink is switched on also while its state
-        is unknown; without one only if the console shows it off.
+        is unknown; without one there is nothing of this integration to undo.
         """
         self._unsub_auto_off = None
-        if self.enforced_at is None and self.backup_enforced is not True:
+        if self.enforced_at is None:
             return
         try:
             await self.async_release_backup()
@@ -996,8 +1012,9 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         console rejects a login once in a while (maintenance, a session
         edge case), and the reauthentication flow needs a person.
         """
-        if isinstance(err, NetworkCertificateError):
-            # Never taken silently: an administrator confirms the new certificate
+        if isinstance(err, NetworkCertificateError) and err.fingerprint:
+            # Not the pinned certificate: never taken silently, an administrator
+            # confirms the new one
             _LOGGER.warning(
                 "The console's certificate is not trusted (%s%s); confirm it with the repair"
                 " in Settings",

@@ -45,7 +45,7 @@ flowchart LR
         wss["Websocket<br/>about once a second"]
     end
     subgraph np["Network Plus"]
-        client["Client<br/>read-only user, pinned certificate"]
+        client["Client<br/>read-only user, certificate checked"]
         admin["Admin client<br/>opt-in, own user"]
         coordinator["Coordinator<br/>push + 60 s poll"]
         history[("History store<br/>per console")]
@@ -131,7 +131,7 @@ The switch guards itself:
 - errors of the console come back as readable messages;
 - only administrators of Home Assistant may use the switch and the buttons; automations and scripts may as well. A user without administrator rights gets an error, like for the page.
 
-Everything that brings the uplink back is in place before the write: the type to restore, the start and the timer. If the console refuses the write, they go again. If its outcome is not known (a timeout, a server error after the write went out), they stay, and the switch shows within a minute what the console did; the timer switches the uplink on in any case. A start the console no longer shows (someone switched the uplink on in UniFi Network) is forgotten, so a later restart never touches a setting made in the console. Withdrawing the admin features (Reconfigure) is refused while the backup is enforced.
+Everything that brings the uplink back is in place before the write: the type to restore, the start and the timer. If the console refuses the write, they go again. If its outcome is not known (a timeout, a server error after the write went out), they stay, and the switch shows within a minute what the console did; the timer switches the uplink on in any case. A start the console no longer shows (someone switched the uplink on in UniFi Network) is forgotten, so a later restart never touches a setting made in the console. An uplink switched off in UniFi Network, not here, is not switched on by Home Assistant: its connection type is known only to the console, and a guessed one (DHCP on a PPPoE line) would cut the line; the switch refuses and says so. Withdrawing the admin features (Reconfigure) is refused while the backup is enforced.
 
 Mind the data: in a test, about 60 MB per minute ran over LTE while the backup was enforced. The attributes `enforced_since` and `auto_off_at` show what is going on.
 
@@ -169,9 +169,13 @@ sequenceDiagram
 
 ### Certificate
 
-The certificate of the console is always checked; there is no switch to turn the check off. A UniFi OS console makes its own certificate, which no system trusts. During setup the integration then shows the certificate's SHA-256 fingerprint and asks you to compare it with the one the console shows (for example in a browser on the console's address: the lock or warning icon → certificate details) and to enter it. From then on it accepts that certificate only, and sends the credentials to nothing else. A console with a certificate the system trusts (your own CA, a public certificate) is checked as such and needs no fingerprint.
+The console's certificate is checked by default (*Verify the certificate*): it needs a chain the system trusts. A publicly trusted certificate, for example one from Let's Encrypt for the console's host name, or one of your own CA in Home Assistant's trust store, is verified like that and needs nothing else; renewals do not matter. Enter the host name the certificate is for, not the IP address.
 
-If the certificate changes, for example after a reset of the console, the entities become unavailable, the log names the new fingerprint and Home Assistant asks again (Settings → Repairs or the integration's page); nothing is accepted by itself. An entry from a version that could turn the check off pins the certificate the console presents at the first start after the update and logs its fingerprint; compare it, and use Reconfigure if it is not the console's.
+**Pinning** is optional and off by default. It fits a console with a certificate it made itself (self-signed, as UniFi OS does out of the box), which no system trusts. With *Pin the certificate*, a second step shows the certificate's SHA-256 fingerprint; compare it with the one the console shows (for example in a browser on the console's address: the lock or warning icon → certificate details) and enter it. From then on only that certificate is accepted. If it changes, for example after a reset of the console, the entities become unavailable, the log names the new fingerprint and Home Assistant asks again (Settings → Repairs or the integration's page); nothing is accepted by itself. Do not pin a certificate that is renewed regularly: a Let's Encrypt certificate changes every 90 days, and every renewal would ask again.
+
+Turning the check off without a pin accepts any certificate: the connection is encrypted, but any device in the network could pose as the console and would get the passwords, the admin password too. Pin the console's own certificate instead.
+
+Updating keeps the certificate settings of an existing entry as they are; nothing is pinned by itself.
 
 ### How the data is updated
 
@@ -429,7 +433,8 @@ With admin features, the switch and the buttons ask before they act:
 
 ## Troubleshooting
 
-- **"The console does not answer"**: check the address. A certificate problem has its own step: the fingerprint of the console's certificate.
+- **"The console does not answer"**: check the address.
+- **"The console's certificate is not trusted"**: for a certificate the console made itself, tick *Pin the certificate*; for a publicly trusted one, enter the host name it is for (see [Certificate](#certificate)).
 - **The fingerprint does not match**: compare once more with the console's certificate. If it really differs, another device answers at this address; do not go on.
 - **"The console rejected the username or the password"**: the user must be a local user of the console, not a UI.com account.
 - **Home Assistant asks for the password although it did not change**: the console rejected the login three polls in a row. The log says why (`login rejected (401)`, a code of the console, or `session not accepted after a new login`). A single rejection, for example when the console's two-hour session expires during maintenance, is retried without asking.
@@ -499,11 +504,11 @@ You need a UniFi OS console with a gateway (Dream Machine, Cloud Gateway, UXG) a
 | Host | IP address or host name of the console, for example 192.168.1.1. |
 | Username | A local user of the console. Create one under UniFi OS → Admins & Users with local access only and the read-only role for the Network application; accounts of UI.com do not work. |
 | Password | The password of that user. |
+| Verify the certificate | On by default: the certificate needs a chain the system trusts. Off accepts any certificate; see [Certificate](#certificate). |
+| Pin the certificate | Off by default. For a console with a certificate of its own: a second step asks for its fingerprint, and only that certificate is accepted. Not for a certificate that is renewed regularly. |
 | Use admin features | Off by default. On, a second dialog asks for the admin credentials for the switch "Enforce backup uplink" and the two speed test buttons; see [Admin features](#admin-features-opt-in). |
 
-If the console's certificate is not trusted by the system, a second step asks for its fingerprint (see [Certificate](#certificate)).
-
-The entry is named after the gateway. Reconfigure changes the address, the user or the admin opt-in; when the read-only password changes, Home Assistant asks for the new one. The options hold the two limits of "Enforce backup uplink", the billing day of the LTE data plan, the expected link speeds and how long the page keeps its history. While the console cannot be reached the options show no link speeds; the ones set stay.
+The entry is named after the gateway. Reconfigure changes the address, the user, the certificate settings or the admin opt-in; when the read-only password changes, Home Assistant asks for the new one. The options hold the two limits of "Enforce backup uplink", the billing day of the LTE data plan, the expected link speeds and how long the page keeps its history. While the console cannot be reached the options show no link speeds; the ones set stay.
 
 ### Removal
 
@@ -518,7 +523,7 @@ scripts/check.sh
 
 `scripts/check.sh` runs what CI runs: ruff, the changelog and translation checks, mypy, the tests with their coverage threshold, the page checks and hassfest in Docker.
 
-The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own certificates) and a throwaway Home Assistant, reachable from this machine only, add the consoles through the config flow with the certificate step, and drive the page in a headless browser (all tabs, the console choice, version line, phone width, dark mode, no page and no admin writes for non-administrators), then stop Home Assistant again. They need their own environment:
+The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own certificates) and a throwaway Home Assistant, reachable from this machine only, add the consoles through the config flow (one pinned, one with the check off), and drive the page in a headless browser (all tabs, the console choice, version line, phone width, dark mode, no page and no admin writes for non-administrators), then stop Home Assistant again. They need their own environment:
 
 ```bash
 uv venv --python 3.14 .venv-panel && uv pip install --python .venv-panel/bin/python -r requirements_panel.txt

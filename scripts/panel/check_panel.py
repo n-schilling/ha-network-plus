@@ -382,47 +382,61 @@ class Instance:
         return access
 
     async def _add_consoles(self, api: Api) -> None:
-        """Add both consoles through the config flow; the certificate step is checked on the way."""
+        """Add both consoles through the config flow, checking the certificate on the way.
+
+        The first one gets its own certificate pinned and the admin opt-in;
+        the second one is first refused with the check on, then added with
+        the check off.
+        """
         flows = "/api/config/config_entries/flow"
-        for index, console in enumerate(self.consoles):
-            admin = index == 0
-            flow = await api.post(self.token, flows, {"handler": "network_plus"})
-            step = await api.post(
-                self.token,
-                f"{flows}/{flow['flow_id']}",
-                {
-                    "host": console.host,
-                    "username": USERNAME,
-                    "password": PASSWORD,
-                    "use_admin": admin,
-                },
-            )
-            if step.get("step_id") != "certificate":
-                raise RuntimeError(f"no certificate step for the console's own certificate: {step}")
-            shown = step["description_placeholders"]["fingerprint"]
-            if shown.replace(":", "").lower() != console.fingerprint:
-                raise RuntimeError(f"another fingerprint shown than the console's: {shown}")
-            wrong = await api.post(
-                self.token, f"{flows}/{flow['flow_id']}", {"certificate_fingerprint": "00" * 32}
-            )
-            if wrong.get("errors") != {"base": "fingerprint_mismatch"}:
-                raise RuntimeError(f"a wrong fingerprint was taken: {wrong}")
-            step = await api.post(
-                self.token, f"{flows}/{flow['flow_id']}", {"certificate_fingerprint": shown}
-            )
-            if admin:
-                if step.get("step_id") != "admin":
-                    raise RuntimeError(f"no admin step: {step}")
-                step = await api.post(
-                    self.token,
-                    f"{flows}/{flow['flow_id']}",
-                    {"admin_username": ADMIN_USERNAME, "admin_password": ADMIN_PASSWORD},
-                )
-            if step.get("type") != "create_entry" or step["result"]["state"] != "loaded":
-                raise RuntimeError(f"{console.name} did not load: {step}")
-            self.entry_ids[console.name] = step["result"]["entry_id"]
-        self.flow_checks.append("certificate step shows the console's fingerprint")
-        self.flow_checks.append("a wrong fingerprint is refused")
+        gateway, office = self.consoles
+        flow = await api.post(self.token, flows, {"handler": "network_plus"})
+        url = f"{flows}/{flow['flow_id']}"
+        step = await api.post(
+            self.token,
+            url,
+            {
+                "host": gateway.host,
+                "username": USERNAME,
+                "password": PASSWORD,
+                "verify_ssl": True,
+                "pin_certificate": True,
+                "use_admin": True,
+            },
+        )
+        if step.get("step_id") != "certificate":
+            raise RuntimeError(f"no certificate step: {step}")
+        shown = step["description_placeholders"]["fingerprint"]
+        if shown.replace(":", "").lower() != gateway.fingerprint:
+            raise RuntimeError(f"another fingerprint shown than the console's: {shown}")
+        wrong = await api.post(self.token, url, {"certificate_fingerprint": "00" * 32})
+        if wrong.get("errors") != {"base": "fingerprint_mismatch"}:
+            raise RuntimeError(f"a wrong fingerprint was taken: {wrong}")
+        step = await api.post(self.token, url, {"certificate_fingerprint": shown})
+        if step.get("step_id") != "admin":
+            raise RuntimeError(f"no admin step: {step}")
+        step = await api.post(
+            self.token,
+            url,
+            {"admin_username": ADMIN_USERNAME, "admin_password": ADMIN_PASSWORD},
+        )
+        if step.get("type") != "create_entry" or step["result"]["state"] != "loaded":
+            raise RuntimeError(f"Gateway did not load: {step}")
+        self.entry_ids[gateway.name] = step["result"]["entry_id"]
+        self.flow_checks.append("pinning: the certificate step shows the console's fingerprint")
+        self.flow_checks.append("pinning: a wrong fingerprint is refused")
+
+        flow = await api.post(self.token, flows, {"handler": "network_plus"})
+        url = f"{flows}/{flow['flow_id']}"
+        office_data = {"host": office.host, "username": USERNAME, "password": PASSWORD}
+        step = await api.post(self.token, url, {**office_data, "verify_ssl": True})
+        if step.get("errors") != {"base": "certificate_not_trusted"}:
+            raise RuntimeError(f"an untrusted certificate was taken: {step}")
+        step = await api.post(self.token, url, {**office_data, "verify_ssl": False})
+        if step.get("type") != "create_entry" or step["result"]["state"] != "loaded":
+            raise RuntimeError(f"Office did not load: {step}")
+        self.entry_ids[office.name] = step["result"]["entry_id"]
+        self.flow_checks.append("without a pin an untrusted certificate is refused while checked")
 
     async def _seed_history(self, api: Api) -> None:
         """Put the made-up history into the first console's store while it is unloaded."""

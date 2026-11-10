@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 from pytest_homeassistant.common import MockConfigEntry
 
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant
 
 from custom_components.network_plus.api import NetworkError, find_gateway
@@ -35,6 +35,7 @@ ENTRY_DATA = {
     CONF_HOST: HOST,
     CONF_USERNAME: USERNAME,
     CONF_PASSWORD: PASSWORD,
+    CONF_VERIFY_SSL: True,
 }
 # The SHA-256 fingerprint of a made-up self-signed certificate of the console
 FINGERPRINT = "ab" * 32
@@ -266,7 +267,7 @@ class FakeConsole:
         self.created_with: list[tuple[str, str, str]] = []
         # The pinned fingerprint each client was created with
         self.pinned: list[str | None] = []
-        # The certificate: None while the system trusts it, else its fingerprint
+        # The fingerprint of the certificate the console presents; None: FINGERPRINT
         self.presented: str | None = None
         self.certificate_error: Exception | None = None
         # A write the console takes, but whose answer or check fails
@@ -324,11 +325,6 @@ class FakeConsole:
         if self.error:
             raise self.error
         return "admin" in self.permissions.get("network.management", [])
-
-    async def untrusted_fingerprint(self) -> str | None:
-        if self.certificate_error:
-            raise self.certificate_error
-        return self.presented
 
     async def get_fingerprint(self) -> str:
         if self.certificate_error:

@@ -7,27 +7,35 @@
           "host": "Host",
           "username": "Username",
           "password": "Password",
+          "verify_ssl": "Verify the certificate",
+          "pin_certificate": "Pin the certificate",
           "use_admin": "Use admin features"
         },
         "data_description": {
           "host": "IP address or host name of the console, for example 192.168.1.1.",
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
+          "verify_ssl": "On by default: the console's certificate must have a chain the system trusts, as a publicly trusted certificate (for example Let's Encrypt for the console's host name) has. Off, any certificate is taken: then any device in the network could pose as the console and would get the passwords, the admin password too. For a certificate the console made itself, pin it instead.",
+          "pin_certificate": "For a console with a certificate of its own (self-signed): the next step shows its fingerprint, you compare and enter it, and only that certificate is taken from then on. Not for a certificate that is renewed regularly (Let's Encrypt every 90 days): each renewal would ask again.",
           "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console, and the buttons \"Run speed test\" and \"Run speed test over backup uplink\". Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
       "reconfigure": {
-        "description": "Change the address, the user or the admin opt-in.",
+        "description": "Change the address, the user, the certificate check or the admin opt-in.",
         "data": {
           "host": "Host",
           "username": "Username",
           "password": "Password",
+          "verify_ssl": "Verify the certificate",
+          "pin_certificate": "Pin the certificate",
           "use_admin": "Use admin features"
         },
         "data_description": {
           "host": "IP address or host name of the console, for example 192.168.1.1.",
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
+          "verify_ssl": "On by default: the console's certificate must have a chain the system trusts, as a publicly trusted certificate (for example Let's Encrypt for the console's host name) has. Off, any certificate is taken: then any device in the network could pose as the console and would get the passwords, the admin password too. For a certificate the console made itself, pin it instead.",
+          "pin_certificate": "For a console with a certificate of its own (self-signed): the next step shows its fingerprint, you compare and enter it, and only that certificate is taken from then on. Not for a certificate that is renewed regularly (Let's Encrypt every 90 days): each renewal would ask again.",
           "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console, and the buttons \"Run speed test\" and \"Run speed test over backup uplink\". Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
@@ -42,7 +50,7 @@
       },
       "certificate": {
         "title": "Certificate of the console",
-        "description": "The console at {host} presents a certificate that the system does not trust; a UniFi OS console makes one for itself. Its SHA-256 fingerprint is:\n\n`{fingerprint}`\n\nCompare it with the certificate the console shows, for example in a browser on the console's address (the lock or warning icon in the address bar → certificate details), and enter it below. Home Assistant then accepts this certificate only; if it changes, you are asked again.",
+        "description": "The console at {host} presents a certificate with this SHA-256 fingerprint:\n\n`{fingerprint}`\n\nCompare it with the certificate the console shows, for example in a browser on the console's address (the lock or warning icon in the address bar → certificate details), and enter it below. Home Assistant then takes this certificate only; if it changes, you are asked again.",
         "data": {
           "certificate_fingerprint": "SHA-256 fingerprint"
         },
@@ -70,7 +78,8 @@
       "admin_invalid_auth": "The console rejected the admin credentials.",
       "not_admin": "This user may not change the Network configuration. It needs the admin role for the Network application.",
       "fingerprint_mismatch": "This is not the fingerprint of the certificate the console presents. If you copied it correctly, another device answers at this address.",
-      "backup_enforced": "The backup uplink is enforced right now. Switch \"Enforce backup uplink\" off first; without the admin features nothing could switch the preferred uplink on again."
+      "backup_enforced": "The backup uplink is enforced right now. Switch \"Enforce backup uplink\" off first; without the admin features nothing could switch the preferred uplink on again.",
+      "certificate_not_trusted": "The console's certificate is not trusted. For a certificate the console made itself, pin it (\"Pin the certificate\"); otherwise check the host name the certificate is for."
     },
     "abort": {
       "already_configured": "This gateway is already set up.",
@@ -197,10 +206,13 @@
       "message": "The console did not start the speed test: {error}"
     },
     "certificate_not_trusted": {
-      "message": "The console's certificate is not trusted ({error}). Confirm the certificate with the repair in Settings."
+      "message": "The console presents another certificate than the pinned one ({error}). Confirm the new certificate with the repair in Settings."
     },
     "console_write_unknown": {
       "message": "The console did not confirm the change ({error}); the switch shows within a minute whether it took it."
+    },
+    "switched_off_in_console": {
+      "message": "The preferred uplink was switched off in the console, not here; its connection type is known only there. Switch it on in UniFi Network."
     }
   },
   "options": {
