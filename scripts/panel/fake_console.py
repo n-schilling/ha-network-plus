@@ -75,12 +75,14 @@ class FakeConsole:
         self.wan_type = "dhcp"
         self.port = 0
         self.fingerprint = ""
+        # Fixed when the console starts: a run time that moves looks like a new test
+        self.started = int(time.time())
         self._runner: web.AppRunner | None = None
 
     # The runtime objects, in the shape stat/device and the websocket send
 
     def gateway(self) -> dict[str, Any]:
-        now = int(time.time())
+        now = self.started
         return {
             "mac": self.mac,
             "type": "udm",
