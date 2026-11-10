@@ -1,4 +1,5 @@
 name: CI
+# scripts/check.sh runs the same checks locally; keep the two in step.
 
 on:
   push:
@@ -72,3 +73,23 @@ jobs:
       - name: Test
         # Silver of the quality scale asks for more than 95 %; this repo keeps 99 %
         run: pytest -v --cov=custom_components.network_plus --cov-report=term-missing --cov-fail-under=99
+
+  page:
+    name: Page
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      # Home Assistant starts only inside a virtual environment
+      - name: Install
+        run: |
+          python -m venv .venv-panel
+          .venv-panel/bin/pip install -r requirements_panel.txt
+          .venv-panel/bin/python -m playwright install --with-deps chromium
+      - name: Check the page in a browser
+        run: .venv-panel/bin/python -I scripts/panel/check_panel.py --browser chromium

@@ -1,0 +1,5 @@
+# Page checks (scripts/panel/check_panel.py): Home Assistant with its frontend,
+# the release the integration is tested against, and Playwright
+homeassistant==2026.11.1
+home-assistant-frontend==20261028.5
+playwright==1.64.1

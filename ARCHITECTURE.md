@@ -199,20 +199,29 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   goes in `async_remove_entry` with the last console.
 - One WebSocket command, `network_plus/overview` (admin only: addresses and
   remote client names): the consoles, and for the one asked for (else the
-  first) the state now and the history. The page asks every 30 s while it is
-  open and visible; a push channel would add code for a page that shows
-  minutes-old history.
+  first) the state now and the history, and the integration's version from
+  `manifest.json` for the line at the bottom of the page. The page asks every
+  30 s while it is open and visible; a push channel would add code for a page
+  that shows minutes-old history. Only the answer to the latest request
+  counts, so a console chosen while a request runs is not switched back.
 - `history.py` keeps one `Store` per console
   (`network_plus.history.<entry_id>`): the coordinator's events (failover,
   restored, brief failover, uplink down/up, public IP changed without the
   addresses), speed tests and drills from their bus events (deduplicated by
   run or start time), and remote sessions from the client list on every
   coordinator update (a client that appears opens a session, one that leaves
-  closes it; an unknown list changes nothing). Saved 10 s after a change and
+  closes it; an unknown list changes nothing). Sessions are told apart by a
+  hash of the console's client ID (by name if there is none), stored with
+  the session but not handed to the page; open sessions from before keys
+  were kept go to the one client of their type and name. Saved 10 s after a change and
   on unload; entries older than the option *Keep history* (365 days) go,
   drills and open sessions stay.
-- The page is plain JavaScript without a build step, one file, styled with
-  the theme's variables like Home Assistant's settings pages.
+- The page is plain JavaScript without a build step, one file, built from
+  Home Assistant's own elements (`ha-card`, `ha-alert`, `ha-icon-button`),
+  which the frontend has loaded already, with the toolbar and tabs of the
+  settings pages; colours come from the theme. Its URL carries a hash of
+  the file, so a browser fetches every changed page. It holds no version of
+  its own.
 
 ## The admin opt-in, the switch "Enforce backup uplink" and the speed test buttons
 
@@ -229,12 +238,34 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   guards), shared by the switch and the backup speed test; the switch is a
   thin entity over them. A switch-back the console refuses leaves the timer
   armed, so the uplink still comes back later.
+- Order of enforcing: the type to restore, the start, the drill and the
+  timer are in place before the write. `set_wan_type` tells a refused write
+  (403, rejected login, `meta.rc` not "ok", the console kept another type)
+  from one of unknown outcome (timeout, network or server error on the PUT,
+  or on the read after it: `NetworkWriteUnknownError`). A refused write
+  takes everything back; an unknown one leaves it, and the next poll or the
+  timer finds out. The switch-back writes the remembered type whenever a
+  start is remembered, whatever the last known state says, because after a
+  write of unknown outcome that state may be old; without a start it writes
+  nothing while the uplink is on, so no guessed type replaces a setting.
+- A poll that shows the preferred uplink on, while no write and no backup
+  measurement is going on, forgets the remembered start: someone switched it
+  on in the console, or the console never took the write. A later restart
+  therefore never switches the uplink on against what was set in the console.
+- Reconfigure refuses to withdraw the admin opt-in while a start is
+  remembered: without the admin user nothing could switch the uplink on again.
+- Only administrators of Home Assistant may use the switch and the buttons
+  (`async_require_admin` on the entity, from the service call's context);
+  calls without a user (automations, scripts) pass. Home Assistant's entity
+  permissions alone would let every user control them, and they write with
+  the console's admin credentials.
 - The switch's state is read, not assumed: on means the preferred uplink's
   `wan_type` is `disabled` in the console's configuration. Switching on
   remembers the previous type and the start in the entry's data, so a
   restart neither forgets what to restore nor when.
 - Guards: it refuses while the backup already carries the traffic and from a
-  configurable share of the LTE data plan on; it switches back by itself
+  configurable share of the LTE data plan on (`guard_percent`: also while the
+  console's data limit is off, by the plan size the console still reports); it switches back by itself
   after a configurable time (default 15 min), also after a restart, and
   retries a failed switch-back every minute. Live, a provoked failover ran
   about 60 MB per minute over LTE.
@@ -271,10 +302,13 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   the coordinator's own listeners (`_async_wait`), not Home Assistant's
   state machine. A timeout or a refused command is a warning in the log; the
   drill protocol and the speed test event report what did happen. The
-  policy, when to measure and whom to tell, stays in automations. If Home
-  Assistant stops in the middle, the task is cancelled; the switch-back is
-  then up to the auto-off timer, re-armed from the entry's data at the next
-  setup.
+  policy, when to measure and whom to tell, stays in automations. On an
+  unload (reload, options, stop) `async_unload_entry` cancels the task and
+  waits for it before Home Assistant detaches the sessions, so its `finally`
+  switches the uplink on over the admin session that still stands. If that
+  fails, the auto-off timer, re-armed from the entry's data at the next
+  setup, does it. The task starts eagerly; a refusal before the first request
+  ends it before it is stored, so it is kept only while it runs.
 
 ## Repair issues
 
@@ -286,7 +320,8 @@ do not share them, and `async_remove_entry` drops them with the entry.
   failed polls, deleted with the next successful one. Fewer failures are
   normal (a reboot of the console) and only make the entities unavailable.
 - **LTE data limit turned off:** per LTE device, from the poll; the console
-  keeps the old limit value, which is why the integration does not use it.
+  keeps the old limit value, so the sensors do not use it; only the guard of
+  "Enforce backup uplink" still goes by it, rather than by nothing.
 - **Admin user cannot write:** checked once per setup with
   `can_manage_network()` (lacking role, or login rejected), and raised at
   once when a write of the switch comes back with 403. A console that does
@@ -304,9 +339,20 @@ do not share them, and `async_remove_entry` drops them with the entry.
   detaches a session created during entry setup when the entry unloads, also
   after a failed setup; the entry registers the detach as well so it is
   visible, and the config flow detaches its own after each check.
-- **Certificate check is an option, on by default.** Consoles ship with a
-  self-signed certificate; the option exists so nobody has to turn off
-  verification globally.
+- **The certificate is always checked.** Consoles ship with a certificate of
+  their own that no system trusts. Instead of a switch to turn the check off
+  the config flow pins it: `untrusted_fingerprint()` tries a verified
+  connection first; if that fails on the certificate, it reads the SHA-256
+  fingerprint by connecting with a fingerprint that cannot match (aiohttp's
+  `ServerFingerprintMismatch` carries the real one; nothing is sent). An
+  administrator enters the fingerprint, compared with the console; every
+  request, the login and the websocket then go with `ssl=Fingerprint(...)`.
+  A changed certificate is a `NetworkCertificateError`: the poll raises
+  `ConfigEntryAuthFailed` at once and logs the new fingerprint; the reauth
+  flow asks for it first and for the password only if the login then fails.
+  Entries from a version with the switch off pin the presented certificate
+  at their first setup (never less safe than before, logged with the
+  fingerprint); with the switch on, the key is just dropped.
 - **No thresholds in code.** "Internet latency" is one series across
   failovers; a threshold helper or an automation decides what is slow. The
   integration sends no notifications.
@@ -321,9 +367,10 @@ do not share them, and `async_remove_entry` drops them with the entry.
 - **Addresses** are the uplink port's addresses: what the provider assigned,
   or a private address behind another router (double NAT); only link-local,
   unspecified, loopback and multicast are left out. They live in disabled
-  diagnostic sensors and in the `public_ip_changed` event, so storing an
-  address in the recorder is the user's choice. An address that appears or
-  vanishes is no change event.
+  `public_ip_changed` event of the entity "Internet", whose `address` and
+  `previous` are unrecorded attributes: automations get them, the recorder,
+  logbook and backups do not. The page's history keeps only uplink and
+  family. An address that appears or vanishes is no change event.
 - **Brief failover tolerance:** a transition timestamp within 30 s of a seen
   switch belongs to that switch. This compares the console's clock with Home
   Assistant's; both are expected to run on NTP.
@@ -402,6 +449,10 @@ while the websocket was recorded. Observed:
 runtime objects (`gateway()`, `lte_device()`, `teleport_client()`). The tests
 cover the client against a fake aiohttp session, the model, the config flow,
 the entities with websocket pushes and polls, the switch, the button, the
-repair issues and the diagnostics. CI runs
-ruff, mypy in strict mode, hassfest, the HACS check (once the repository is
-public) and pytest with a coverage floor of 99 %.
+repair issues and the diagnostics; `tests/test_certificate.py` checks the
+pinning against a real TLS server on 127.0.0.1. The page checks
+(`scripts/panel/check_panel.py`) run Home Assistant with two made-up consoles
+(`scripts/panel/fake_console.py`, HTTPS with their own certificates) and a
+browser. CI runs ruff, mypy in strict mode, hassfest, the HACS check, pytest
+with a coverage floor of 99 % and the page checks; `scripts/check.sh` runs the
+same locally.
