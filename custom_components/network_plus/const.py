@@ -18,6 +18,11 @@ UPDATE_INTERVAL: Final = timedelta(seconds=60)
 RECONNECT_MIN: Final = 5.0
 RECONNECT_MAX: Final = 300.0
 
+# The SHA-256 fingerprint of the console's own certificate, as hex, pinned once
+# an administrator confirmed it; without it the certificate needs a chain the
+# system trusts. The certificate is always checked.
+CONF_CERT_FINGERPRINT: Final = "certificate_fingerprint"
+
 # Admin features: an explicit opt-in with its own credentials, kept apart
 # from the read-only ones. Without them the integration never writes.
 CONF_USE_ADMIN: Final = "use_admin"

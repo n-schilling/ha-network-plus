@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 from .const import (
     CONF_ADMIN_PASSWORD,
     CONF_ADMIN_USERNAME,
+    CONF_CERT_FINGERPRINT,
     CONF_DRILL,
     CONF_ENFORCED_AT,
     CONF_SPEEDTEST_UPLINK,
@@ -70,6 +71,8 @@ async def async_get_config_entry_diagnostics(
                 CONF_USERNAME,
                 CONF_ADMIN_USERNAME,
                 CONF_ADMIN_PASSWORD,
+                # Identifies the console as well as its address
+                CONF_CERT_FINGERPRINT,
                 # Times
                 CONF_ENFORCED_AT,
                 CONF_DRILL,

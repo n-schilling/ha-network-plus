@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_ON
 from homeassistant.const import ATTR_ENTITY_ID

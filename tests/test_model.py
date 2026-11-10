@@ -21,6 +21,7 @@ from custom_components.network_plus.model import (
     apply_billing,
     billing_period_start,
     brief_failover_candidate,
+    client_key,
     detect_active_events,
     detect_address_events,
     detect_online_events,
@@ -445,14 +446,31 @@ def test_parse_clients() -> None:
         {"display_name": "No type"},
         "junk",
     ]
-    assert parse_clients(clients) == (
-        VpnClient("Amy", "TELEPORT", datetime.fromtimestamp(1_700_000_000, UTC)),
-        VpnClient("Zed", "TELEPORT", datetime.fromtimestamp(1_700_000_000, UTC)),
-        VpnClient("Office", "VPN", None),
-        VpnClient("VPN", "VPN", None),
-        VpnClient("road-warrior", "VPN", None),
-    )
+    parsed = parse_clients(clients)
+    assert [(c.name, c.type, c.since) for c in parsed] == [
+        ("Amy", "TELEPORT", datetime.fromtimestamp(1_700_000_000, UTC)),
+        ("Zed", "TELEPORT", datetime.fromtimestamp(1_700_000_000, UTC)),
+        ("Office", "VPN", None),
+        ("VPN", "VPN", None),
+        ("road-warrior", "VPN", None),
+    ]
+    assert len({c.key for c in parsed}) == 5
     assert parse_clients([]) == ()
+
+
+def test_client_keys() -> None:
+    """Two clients of the same name stay apart by their ID; the key is no ID itself."""
+    first, second = parse_clients(
+        [teleport_client("Phone", client_id="c1"), teleport_client("Phone", client_id="c2")]
+    )
+    assert first.key != second.key
+    assert "c1" not in first.key
+    # The same client keeps its key, also under another name
+    assert parse_clients([teleport_client("Renamed", client_id="c1")])[0].key == first.key
+    assert first.key == client_key("TELEPORT", "c1", "Phone")
+    # Without an ID the name has to do
+    assert client_key("VPN", None, "Laptop") == client_key("VPN", None, "Laptop")
+    assert client_key("VPN", None, "Laptop") != client_key("VPN", None, "Desk")
 
 
 def test_state_with_lte_and_clients() -> None:
@@ -461,7 +479,12 @@ def test_state_with_lte_and_clients() -> None:
     assert state.lte is not None and state.lte[LTE_MAC].usage_bytes == 1_500_000
     assert parse_state(gateway(), wan_configs(), []).lte == {}
     assert state.vpn_clients == (
-        VpnClient("Phone", "TELEPORT", datetime.fromtimestamp(1_700_000_000, UTC)),
+        VpnClient(
+            "Phone",
+            "TELEPORT",
+            datetime.fromtimestamp(1_700_000_000, UTC),
+            client_key("TELEPORT", None, "Phone"),
+        ),
     )
 
 

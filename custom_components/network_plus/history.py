@@ -26,6 +26,7 @@ from .model import (
     EVENT_UPLINK_DOWN,
     EVENT_UPLINK_UP,
     UplinkEvent,
+    VpnClient,
 )
 
 STORAGE_VERSION = 1
@@ -140,17 +141,32 @@ class History:
         if clients is None:
             return
         now = _now()
-        current = {(client.type, client.name): client for client in clients}
+        current = {client.key: client for client in clients}
         changed = False
         for session in self.sessions:
-            if session["until"] is None and (session["type"], session["name"]) not in current:
+            if session["until"] is not None:
+                continue
+            key = session.get("key") or _legacy_key(session, current)
+            if key in current:
+                if session.get("key") != key:
+                    session["key"] = key
+                    changed = True
+            else:
                 session["until"] = now
                 changed = True
-        open_keys = {(s["type"], s["name"]) for s in self.sessions if s["until"] is None}
+        open_keys = {s.get("key") for s in self.sessions if s["until"] is None}
         for key, client in current.items():
             if key not in open_keys:
                 since = client.since.isoformat() if client.since else now
-                self.sessions.append({"at": since, "until": None, "type": key[0], "name": key[1]})
+                self.sessions.append(
+                    {
+                        "at": since,
+                        "until": None,
+                        "type": client.type,
+                        "name": client.name,
+                        "key": key,
+                    }
+                )
                 changed = True
         if changed:
             self._changed()
@@ -162,7 +178,11 @@ class History:
             "events": sorted(self.events, key=_at),
             "speedtests": sorted(self.speedtests, key=_at),
             "drills": sorted(self.drills, key=_at),
-            "sessions": sorted(self.sessions, key=_at),
+            # The key only tells sessions apart; the page has no use for it
+            "sessions": [
+                {k: v for k, v in session.items() if k != "key"}
+                for session in sorted(self.sessions, key=_at)
+            ],
         }
 
     async def async_flush(self) -> None:
@@ -223,3 +243,17 @@ def _at(item: dict[str, Any]) -> datetime:
 
 def _now() -> str:
     return dt_util.utcnow().isoformat()
+
+
+def _legacy_key(session: dict[str, Any], current: dict[str, VpnClient]) -> str | None:
+    """Return the key of the client an open session from before keys were kept belongs to.
+
+    Such a session knows only type and name; it goes to the one client with
+    both, else it is over.
+    """
+    matches = [
+        key
+        for key, client in current.items()
+        if client.type == session.get("type") and client.name == session.get("name")
+    ]
+    return matches[0] if len(matches) == 1 else None

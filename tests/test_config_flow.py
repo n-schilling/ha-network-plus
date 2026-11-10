@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant import config_entries
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
@@ -15,6 +15,9 @@ from custom_components.network_plus.const import (
     CONF_ADMIN_PASSWORD,
     CONF_ADMIN_USERNAME,
     CONF_AUTO_OFF_MINUTES,
+    CONF_CERT_FINGERPRINT,
+    CONF_ENFORCED_AT,
+    CONF_ENFORCED_WAN_TYPE,
     CONF_HISTORY_DAYS,
     CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
@@ -22,7 +25,7 @@ from custom_components.network_plus.const import (
     DOMAIN,
 )
 
-from .conftest import ENTRY_DATA, HOST, MAC, FakeConsole, gateway
+from .conftest import ENTRY_DATA, FINGERPRINT, HOST, MAC, FakeConsole, gateway
 
 
 async def _start(hass: HomeAssistant, data: dict) -> dict:
@@ -41,15 +44,64 @@ async def test_user_creates_entry(hass: HomeAssistant, console: FakeConsole) -> 
     assert result["data"] == {**ENTRY_DATA, CONF_USE_ADMIN: False}
     assert result["result"].unique_id == MAC
     assert console.created_with[0] == (HOST, "homeassistant", "secret")
-    # The flow's session is given back; the entry's own session was created after it
-    assert console.detached == 1
+    # The flow's sessions are given back; the entry's own session was created after them
+    assert console.detached == 2
+    # A certificate the system trusts is checked as such, not pinned
+    assert console.pinned == [None, None, None]
 
 
-async def test_verify_ssl_defaults_to_on(hass: HomeAssistant, console: FakeConsole) -> None:
-    """Without the checkbox the certificate is checked."""
-    data = {k: v for k, v in ENTRY_DATA.items() if k != CONF_VERIFY_SSL}
-    result = await _start(hass, data)
-    assert result["data"][CONF_VERIFY_SSL] is True
+async def test_untrusted_certificate_is_pinned_once_confirmed(
+    hass: HomeAssistant, console: FakeConsole
+) -> None:
+    """A self-signed certificate is pinned only after its fingerprint was entered."""
+    console.presented = FINGERPRINT
+    result = await _start(hass, ENTRY_DATA)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "certificate"
+    placeholders = result["description_placeholders"]
+    assert placeholders["host"] == HOST
+    assert placeholders["fingerprint"] == ":".join(["AB"] * 32)
+    # Nothing logged in yet: the credentials go to the console only once it is trusted
+    assert console.created_with == [(HOST, "homeassistant", "secret")]
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_CERT_FINGERPRINT: "cd" * 32}
+    )
+    assert result["errors"] == {"base": "fingerprint_mismatch"}
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_CERT_FINGERPRINT: " " + ":".join(["AB"] * 32) + " "}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"] == {
+        **ENTRY_DATA,
+        CONF_CERT_FINGERPRINT: FINGERPRINT,
+        CONF_USE_ADMIN: False,
+    }
+    assert console.pinned[1] == FINGERPRINT
+
+
+async def test_login_error_after_the_certificate_returns_to_the_form(
+    hass: HomeAssistant, console: FakeConsole
+) -> None:
+    """A wrong password after the certificate shows the first form; the certificate stays confirmed."""
+    console.presented = FINGERPRINT
+    result = await _start(hass, ENTRY_DATA)
+    console.error = NetworkAuthError("no")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_CERT_FINGERPRINT: FINGERPRINT}
+    )
+    assert result["step_id"] == "user"
+    assert result["errors"] == {"base": "invalid_auth"}
+    console.error = None
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], ENTRY_DATA)
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_CERT_FINGERPRINT] == FINGERPRINT
+
+
+async def test_certificate_unreadable(hass: HomeAssistant, console: FakeConsole) -> None:
+    """A console that cannot be reached for its certificate cannot be added."""
+    console.certificate_error = NetworkError("down")
+    result = await _start(hass, ENTRY_DATA)
+    assert result["errors"] == {"base": "cannot_connect"}
 
 
 @pytest.mark.parametrize(
@@ -70,7 +122,7 @@ async def test_user_errors(
     console.error = None
     result = await hass.config_entries.flow.async_configure(result["flow_id"], ENTRY_DATA)
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert console.detached == 2
+    assert console.detached == 4
 
 
 async def test_user_no_gateway(hass: HomeAssistant, console: FakeConsole) -> None:
@@ -147,6 +199,108 @@ async def test_reauth(
     assert console.created_with[-1][2] == "new"
 
 
+async def test_reauth_for_a_changed_certificate(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """A changed certificate is asked for first; the stored password logs in after it."""
+    config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        config_entry, data={**config_entry.data, CONF_CERT_FINGERPRINT: "cd" * 32}
+    )
+    console.presented = FINGERPRINT
+    result = await config_entry.start_reauth_flow(hass)
+    assert result["step_id"] == "certificate"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_CERT_FINGERPRINT: FINGERPRINT}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert config_entry.data[CONF_CERT_FINGERPRINT] == FINGERPRINT
+    assert config_entry.data[CONF_PASSWORD] == ENTRY_DATA[CONF_PASSWORD]
+
+
+async def test_reauth_certificate_then_password(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """If the stored password fails after the certificate, the password is asked for."""
+    config_entry.add_to_hass(hass)
+    console.presented = FINGERPRINT
+    console.error = NetworkAuthError("no")
+    result = await config_entry.start_reauth_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_CERT_FINGERPRINT: FINGERPRINT}
+    )
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "invalid_auth"}
+    console.error = None
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_PASSWORD: "new"}
+    )
+    assert result["reason"] == "reauth_successful"
+    assert config_entry.data[CONF_PASSWORD] == "new"
+    assert config_entry.data[CONF_CERT_FINGERPRINT] == FINGERPRINT
+
+
+async def test_reauth_when_the_certificate_cannot_be_read(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """Without a readable certificate the password form comes, and tells the console is away."""
+    config_entry.add_to_hass(hass)
+    console.certificate_error = NetworkError("down")
+    result = await config_entry.start_reauth_flow(hass)
+    assert result["step_id"] == "reauth_confirm"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_PASSWORD: "new"}
+    )
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reconfigure_keeps_a_confirmed_certificate(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """The pinned certificate of the same host is not asked for again; a new host asks."""
+    config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        config_entry, data={**config_entry.data, CONF_CERT_FINGERPRINT: FINGERPRINT}
+    )
+    console.presented = FINGERPRINT
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    result = await config_entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**ENTRY_DATA, CONF_USERNAME: "other"}
+    )
+    assert result["reason"] == "reconfigure_successful"
+    assert config_entry.data[CONF_CERT_FINGERPRINT] == FINGERPRINT
+    await hass.async_block_till_done()
+    result = await config_entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**ENTRY_DATA, CONF_HOST: "192.0.2.2"}
+    )
+    assert result["step_id"] == "certificate"
+
+
+async def test_reconfigure_keeps_admin_while_the_backup_is_enforced(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """Withdrawing the admin features is refused while the preferred uplink is off."""
+    hass.config_entries.async_update_entry(
+        setup_admin_entry,
+        data={
+            **setup_admin_entry.data,
+            CONF_ENFORCED_WAN_TYPE: "dhcp",
+            CONF_ENFORCED_AT: "2026-01-01T00:00:00+00:00",
+        },
+    )
+    result = await setup_admin_entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**ENTRY_DATA, CONF_USE_ADMIN: False}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "backup_enforced"}
+    assert setup_admin_entry.data[CONF_USE_ADMIN] is True
+
+
 async def test_admin_opt_in(hass: HomeAssistant, console: FakeConsole) -> None:
     """With the opt-in a second dialog asks for admin credentials and checks their rights."""
     result = await _start(hass, {**ENTRY_DATA, CONF_USE_ADMIN: True})
@@ -170,7 +324,7 @@ async def test_admin_opt_in(hass: HomeAssistant, console: FakeConsole) -> None:
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == {**ENTRY_DATA, CONF_USE_ADMIN: True, **admin}
     assert console.created_with[-1] == (HOST, "netadmin", "admin-secret")
-    assert console.detached == 5  # every check gave its session back
+    assert console.detached == 6  # every check gave its session back
 
 
 async def test_no_opt_in_stores_no_admin_keys(hass: HomeAssistant, console: FakeConsole) -> None:

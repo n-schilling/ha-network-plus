@@ -11,9 +11,7 @@ SKIPPED_DIRS = {".git", ".venv", "__pycache__", ".pytest_cache", ".ruff_cache", 
 # Chunks that hold the picture itself; everything else (text, time, EXIF,
 # colour profile) can carry where and when an image was made
 IMAGE_CHUNKS = {b"IHDR", b"PLTE", b"IDAT", b"IEND"}
-README_IMAGE = re.compile(
-    r"https://raw\.githubusercontent\.com/n-schilling/ha-network-plus/main/(docs/images/[\w.-]+)"
-)
+README_IMAGE = re.compile(r'src="(docs/screenshots/[\w.-]+)"')
 
 
 def _png_problems(data: bytes) -> list[str]:
@@ -37,9 +35,12 @@ def test_images_carry_no_metadata() -> None:
         for path in ROOT.rglob("*")
         if path.is_file()
         and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-        and not SKIPPED_DIRS & set(path.relative_to(ROOT).parts)
+        and not any(
+            part in SKIPPED_DIRS or part.startswith(".venv")
+            for part in path.relative_to(ROOT).parts
+        )
     ]
-    assert any(p.parent.name == "images" for p in images), "the screenshots are checked"
+    assert any(p.parent.name == "screenshots" for p in images), "the screenshots are checked"
     for path in images:
         assert path.suffix == ".png", f"{path}: only PNG, so it can be checked"
         problems = _png_problems(path.read_bytes())
@@ -54,7 +55,9 @@ def test_metadata_check_catches_metadata() -> None:
 
 
 def test_readme_shows_the_images() -> None:
-    """The README links every screenshot, from main so HACS shows them too."""
+    """The README shows every screenshot, and none that is missing."""
     linked = set(README_IMAGE.findall((ROOT / "README.md").read_text(encoding="utf-8")))
-    on_disk = {p.relative_to(ROOT).as_posix() for p in (ROOT / "docs" / "images").glob("*.png")}
+    on_disk = {
+        p.relative_to(ROOT).as_posix() for p in (ROOT / "docs" / "screenshots").glob("*.png")
+    }
     assert linked == on_disk

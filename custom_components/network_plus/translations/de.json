@@ -7,31 +7,27 @@
           "host": "Host",
           "username": "Benutzername",
           "password": "Passwort",
-          "verify_ssl": "Zertifikat prüfen",
           "use_admin": "Admin-Funktionen nutzen"
         },
         "data_description": {
           "host": "IP-Adresse oder Hostname der Konsole, zum Beispiel 192.168.1.1.",
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
-          "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt.",
           "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet, und die Tasten „Speedtest starten“ und „Speedtest über Backup-Leitung“. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
       "reconfigure": {
-        "description": "Adresse, Benutzer oder Zertifikatsprüfung ändern.",
+        "description": "Adresse, Benutzer oder Admin-Zugang ändern.",
         "data": {
           "host": "Host",
           "username": "Benutzername",
           "password": "Passwort",
-          "verify_ssl": "Zertifikat prüfen",
           "use_admin": "Admin-Funktionen nutzen"
         },
         "data_description": {
           "host": "IP-Adresse oder Hostname der Konsole, zum Beispiel 192.168.1.1.",
           "username": "Ein lokaler Benutzer der Konsole, kein UI.com-Konto.",
           "password": "Das Passwort dieses Benutzers.",
-          "verify_ssl": "Nur ausschalten, wenn die Konsole ein eigenes, selbst signiertes Zertifikat nutzt.",
           "use_admin": "Für den Schalter „Backup-Leitung erzwingen“, der die bevorzugte Leitung in der Konsole abschaltet, und die Tasten „Speedtest starten“ und „Speedtest über Backup-Leitung“. Fragt im nächsten Schritt nach eigenen Admin-Zugangsdaten; ohne sie schreibt die Integration nie."
         }
       },
@@ -42,6 +38,16 @@
         },
         "data_description": {
           "password": "Das Passwort des lokalen Benutzers."
+        }
+      },
+      "certificate": {
+        "title": "Zertifikat der Konsole",
+        "description": "Die Konsole unter {host} zeigt ein Zertifikat, dem das System nicht vertraut; eine UniFi-OS-Konsole erstellt sich eines selbst. Sein SHA-256-Fingerabdruck ist:\n\n`{fingerprint}`\n\nVergleiche ihn mit dem Zertifikat, das die Konsole zeigt, zum Beispiel im Browser unter der Adresse der Konsole (Schloss- oder Warnsymbol in der Adresszeile → Zertifikatdetails), und gib ihn unten ein. Home Assistant nimmt dann nur noch dieses Zertifikat an; ändert es sich, wirst du erneut gefragt.",
+        "data": {
+          "certificate_fingerprint": "SHA-256-Fingerabdruck"
+        },
+        "data_description": {
+          "certificate_fingerprint": "So, wie der Browser ihn zeigt, mit oder ohne Doppelpunkte."
         }
       },
       "admin": {
@@ -58,15 +64,17 @@
       }
     },
     "error": {
-      "cannot_connect": "Die Konsole antwortet nicht. Prüfe die Adresse und, falls die Konsole ein selbst signiertes Zertifikat hat, die Zertifikatsprüfung.",
+      "cannot_connect": "Die Konsole antwortet nicht. Prüfe die Adresse.",
       "invalid_auth": "Die Konsole hat Benutzername oder Passwort abgelehnt.",
       "no_gateway": "Die Konsole hat kein Gateway in ihrer UniFi-Network-Anwendung.",
       "admin_invalid_auth": "Die Konsole hat die Admin-Zugangsdaten abgelehnt.",
-      "not_admin": "Dieser Benutzer darf die Network-Konfiguration nicht ändern. Er braucht die Admin-Rolle für die Network-Anwendung."
+      "not_admin": "Dieser Benutzer darf die Network-Konfiguration nicht ändern. Er braucht die Admin-Rolle für die Network-Anwendung.",
+      "fingerprint_mismatch": "Das ist nicht der Fingerabdruck des Zertifikats, das die Konsole zeigt. Wenn er richtig abgeschrieben ist, antwortet unter dieser Adresse ein anderes Gerät.",
+      "backup_enforced": "Die Backup-Leitung ist gerade erzwungen. Schalte „Backup-Leitung erzwingen“ zuerst aus; ohne Admin-Zugang könnte nichts die bevorzugte Leitung wieder einschalten."
     },
     "abort": {
       "already_configured": "Dieses Gateway ist schon eingerichtet.",
-      "reauth_successful": "Das Passwort wurde aktualisiert.",
+      "reauth_successful": "Die Konsole wurde aktualisiert.",
       "reconfigure_successful": "Die Konsole wurde aktualisiert.",
       "wrong_gateway": "Diese Konsole hat ein anderes Gateway als das eingerichtete."
     }
@@ -187,6 +195,12 @@
     },
     "speedtest_not_started": {
       "message": "Die Konsole hat den Speedtest nicht gestartet: {error}"
+    },
+    "certificate_not_trusted": {
+      "message": "Dem Zertifikat der Konsole wird nicht vertraut ({error}). Bestätige das Zertifikat über die Reparatur in den Einstellungen."
+    },
+    "console_write_unknown": {
+      "message": "Die Konsole hat die Änderung nicht bestätigt ({error}); ob sie übernommen wurde, zeigt der Schalter innerhalb einer Minute."
     }
   },
   "options": {
@@ -222,7 +236,7 @@
     },
     "lte_limit_disabled": {
       "title": "{title}: LTE-Datenlimit ausgeschaltet",
-      "description": "Das Datenlimit von {name} ist in UniFi Network ausgeschaltet. Der Sensor „LTE-Daten verbraucht“ bleibt unbekannt, und der Schalter „Backup-Leitung erzwingen“ kann nahe am Limit nicht verweigern. Schalte das Limit in UniFi Network in den Einstellungen des LTE-Geräts ein, oder ignoriere den Hinweis, wenn du keins willst."
+      "description": "Das Datenlimit von {name} ist in UniFi Network ausgeschaltet. Der Sensor „LTE-Daten verbraucht“ bleibt unbekannt. Der Schalter „Backup-Leitung erzwingen“ verweigert trotzdem nahe der dort eingestellten Tarifgröße, solange die Konsole sie meldet. Schalte das Limit in UniFi Network in den Einstellungen des LTE-Geräts ein, oder ignoriere diesen Hinweis, wenn du keines willst."
     },
     "admin_not_allowed": {
       "title": "{title}: Admin-Benutzer kann nicht schreiben",

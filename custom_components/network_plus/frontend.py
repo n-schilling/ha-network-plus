@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from homeassistant.components import panel_custom
 from homeassistant.components.frontend import async_panel_exists, async_remove_panel
 from homeassistant.components.http.server import StaticPathConfig
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.loader import async_get_integration
 from homeassistant.util.hass_dict import HassKey
 
 from .const import (
@@ -38,16 +38,24 @@ async def async_register_frontend(hass: HomeAssistant) -> None:
         )
     if async_panel_exists(hass, PANEL_URL_PATH):
         return
-    integration = await async_get_integration(hass, DOMAIN)
+    digest = await hass.async_add_executor_job(
+        _digest, Path(__file__).parent / "frontend" / PANEL_FILENAME
+    )
     await panel_custom.async_register_panel(
         hass,
         frontend_url_path=PANEL_URL_PATH,
         webcomponent_name=PANEL_ELEMENT,
         sidebar_title=PANEL_TITLE,
         sidebar_icon=PANEL_ICON,
-        module_url=f"{PANEL_PATH}?v={integration.version}",
+        # The content hash makes browsers fetch every changed page, also within a version
+        module_url=f"{PANEL_PATH}?v={digest}",
         require_admin=True,
     )
+
+
+def _digest(path: Path) -> str:
+    """Return a short hash of the page's script."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
 
 
 @callback

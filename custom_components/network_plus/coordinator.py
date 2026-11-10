@@ -24,12 +24,15 @@ from homeassistant.util import dt as dt_util
 
 from .api import (
     NetworkAuthError,
+    NetworkCertificateError,
     NetworkClient,
     NetworkError,
     NetworkPermissionError,
     NetworkServerError,
+    NetworkWriteUnknownError,
     find_gateway,
     find_lte_devices,
+    format_fingerprint,
     is_lte_device,
 )
 from .const import (
@@ -111,6 +114,10 @@ class RuntimeData:
 type NetworkConfigEntry = ConfigEntry[RuntimeData]
 
 
+class WriteUnknownError(HomeAssistantError):
+    """A write to the console went out; whether the console took it is not known."""
+
+
 class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
     """Keep the gateway's state; tell listeners what happened in between.
 
@@ -171,6 +178,9 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._unsub_auto_off: CALLBACK_TYPE | None = None
         # The running speed test over the backup uplink
         self.backup_speedtest: asyncio.Task[None] | None = None
+        # Writes of the preferred uplink's type in progress: until they are
+        # done, a poll does not take the console's state as the outcome
+        self._wan_writes = 0
         # Consecutive failed polls, for the repair issue "console unreachable"
         self._failed_polls = 0
         # Consecutive polls with a rejected login, before the password is asked for
@@ -216,6 +226,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._auth_failures = 0
         self._server_errors = 0
         self._check_lte_limits(state)
+        self._forget_enforced_if_on(state)
         return state
 
     def _hold_after_server_error(self, err: NetworkServerError) -> NetworkState:
@@ -339,7 +350,19 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._lte_reports = parse_lte_reports(daily, monthly, zone, now)
 
     async def async_set_wan_type(self, key: str, wan_type: str) -> None:
-        """Set the WAN type of the uplink ``key`` with the admin credentials, then refresh."""
+        """Set the WAN type of the uplink ``key`` with the admin credentials, then refresh.
+
+        Raises ``WriteUnknownError`` when the write went out but its outcome
+        is not known, any other ``HomeAssistantError`` when the console did not
+        take it.
+        """
+        self._wan_writes += 1
+        try:
+            await self._async_write_wan_type(key, wan_type)
+        finally:
+            self._wan_writes -= 1
+
+    async def _async_write_wan_type(self, key: str, wan_type: str) -> None:
         async with self._admin_write("console_write_failed") as client:
             uplink = self.data.uplinks.get(key)
             if uplink is None or uplink.config_id is None:
@@ -401,20 +424,49 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         return dt_util.parse_datetime(str(self.config_entry.data.get(CONF_ENFORCED_AT) or ""))
 
     async def async_enforce_backup(self) -> None:
-        """Switch the preferred uplink off, unless that would be unwise; the drill begins."""
+        """Switch the preferred uplink off, unless that would be unwise; the drill begins.
+
+        Everything that brings the uplink back is in place before the write:
+        the type to restore, the start and the timer. If the console did not
+        take the write, they go again; if that is not known (a timeout, a
+        server error), they stay and the timer finds out.
+        """
         primary = self._check_enforceable()
         previous = primary.wan_type if primary.wan_type != WAN_TYPE_DISABLED else None
+        drill_before = self.drill
         self._remember_enforced(previous or self.restore_type, dt_util.utcnow())
-        await self.async_set_wan_type(primary.key, WAN_TYPE_DISABLED)
-        # The drill protocol: the failover and the return are timed from here
+        # The drill protocol: the failover and the return are timed from here;
+        # a failover seen during the write already counts
         self.start_drill()
         self.arm_auto_off(self.auto_off)
+        try:
+            await self.async_set_wan_type(primary.key, WAN_TYPE_DISABLED)
+        except WriteUnknownError:
+            raise
+        except HomeAssistantError:
+            # The console kept the uplink on, or the write never went out
+            self._forget_enforced()
+            self._restore_drill(drill_before)
+            raise
 
     async def async_release_backup(self) -> None:
-        """Switch the preferred uplink on again."""
+        """Switch the preferred uplink on again.
+
+        With a remembered start the remembered type is written, whatever the
+        last known state says: after a write of unknown outcome that state may
+        be old. Without one, nothing is written while the uplink is on.
+        """
         primary = self.primary_uplink
         if primary is None:
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_wan_config")
+        if self.enforced_at is None:
+            enforced = self.backup_enforced
+            if enforced is False:
+                self.cancel_auto_off()
+                self.async_update_listeners()
+                return
+            if enforced is None:
+                raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_wan_config")
         # The return is timed from the switch-back, so note it before the write
         self.end_drill()
         try:
@@ -423,9 +475,38 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             # The timer stays armed: it tries again later
             self.reopen_drill()
             raise
-        self.cancel_auto_off()
-        self._remember_enforced(None, None)
+        self._forget_enforced()
         self.async_update_listeners()
+
+    @callback
+    def _forget_enforced(self) -> None:
+        """Stop the timer and drop the type to restore and the start."""
+        self.cancel_auto_off()
+        if CONF_ENFORCED_AT in self.config_entry.data or (
+            CONF_ENFORCED_WAN_TYPE in self.config_entry.data
+        ):
+            self._remember_enforced(None, None)
+
+    @callback
+    def _forget_enforced_if_on(self, state: NetworkState) -> None:
+        """Drop a remembered start once the console shows the preferred uplink on.
+
+        So a start of an attempt the console did not take, or of an enforcing
+        someone ended in the console, cannot switch the uplink on after a
+        later restart, against what was set in the console meanwhile.
+        """
+        primary = state.uplinks.get(state.primary) if state.primary else None
+        if (
+            self._wan_writes == 0
+            and self.backup_speedtest is None
+            and primary is not None
+            and primary.wan_type is not None
+            and primary.wan_type != WAN_TYPE_DISABLED
+            and self.enforced_at is not None
+        ):
+            _LOGGER.debug("The preferred uplink is on in the console; the enforcing is over")
+            self.end_drill()
+            self._forget_enforced()
 
     def _check_enforceable(self) -> Uplink:
         """Return the preferred uplink if switching it off is wise now; raise otherwise."""
@@ -441,7 +522,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         for lte in (data.lte or {}).values():
             # The billing period and the console's calendar month both count:
             # the console's own data limit goes by the month
-            used = lte.highest_percent
+            used = lte.guard_percent
             if used is not None and used >= limit:
                 raise ServiceValidationError(
                     translation_domain=DOMAIN,
@@ -493,9 +574,13 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             self._unsub_auto_off = None
 
     async def _async_auto_off(self, _now: datetime) -> None:
-        """Switch back after the configured time."""
+        """Switch back after the configured time; if that fails, try again in a minute.
+
+        With a remembered start the uplink is switched on also while its state
+        is unknown; without one only if the console shows it off.
+        """
         self._unsub_auto_off = None
-        if not self.backup_enforced:
+        if self.enforced_at is None and self.backup_enforced is not True:
             return
         try:
             await self.async_release_backup()
@@ -517,15 +602,26 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             )
         self._check_no_speedtest_running()
         self._check_enforceable()
-        self.backup_speedtest = self.config_entry.async_create_background_task(
+        task = self.config_entry.async_create_background_task(
             self.hass, self._async_backup_speedtest(), "network_plus backup speed test"
         )
+        # The task starts eagerly: a refusal before the first request ends it here already
+        self.backup_speedtest = None if task.done() else task
         self.async_update_listeners()
+
+    async def async_stop_backup_speedtest(self) -> None:
+        """End a running speed test over the backup uplink; it switches the uplink on again."""
+        task = self.backup_speedtest
+        if task is None:
+            return
+        task.cancel()
+        await asyncio.wait([task])
 
     async def _async_backup_speedtest(self) -> None:
         try:
-            await self.async_enforce_backup()
             try:
+                # Inside: whatever the write did, the switch-back below runs
+                await self.async_enforce_backup()
                 if not await self._async_wait(lambda s: s.backup_active is True, FAILOVER_TIMEOUT):
                     raise HomeAssistantError("the gateway did not switch to the backup in time")
                 before = self.data.speedtest.last_run if self.data.speedtest else None
@@ -540,7 +636,10 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
                 ):
                     raise HomeAssistantError("the gateway reported no result in time")
             finally:
-                await self.async_release_backup()
+                # Only if something is to switch back: an attempt the console
+                # did not take has nothing to restore
+                if self.enforced_at is not None:
+                    await self.async_release_backup()
         except HomeAssistantError as err:
             _LOGGER.warning("Speed test over the backup uplink: %s", err)
         finally:
@@ -579,6 +678,12 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             raise HomeAssistantError(translation_domain=DOMAIN, translation_key="no_admin")
         try:
             yield self.admin_client
+        except NetworkWriteUnknownError as err:
+            raise WriteUnknownError(
+                translation_domain=DOMAIN,
+                translation_key="console_write_unknown",
+                translation_placeholders={"error": str(err)},
+            ) from err
         except NetworkAuthError as err:
             raise HomeAssistantError(
                 translation_domain=DOMAIN, translation_key="admin_login_rejected"
@@ -697,6 +802,16 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         """Forget the end of the drill: the console did not take the switch-back."""
         if self.drill is not None and not self.drill.completed and self.drill.ended_at is not None:
             self._save_drill(replace(self.drill, ended_at=None))
+
+    @callback
+    def _restore_drill(self, drill: Drill | None) -> None:
+        """Put back the drill from before an attempt the console did not take."""
+        self.drill = drill
+        data = {k: v for k, v in self.config_entry.data.items() if k != CONF_DRILL}
+        if drill is not None:
+            data[CONF_DRILL] = drill.as_dict()
+        self.hass.config_entries.async_update_entry(self.config_entry, data=data)
+        self.async_update_listeners()
 
     @callback
     def _save_drill(self, drill: Drill) -> None:
@@ -881,6 +996,19 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         console rejects a login once in a while (maintenance, a session
         edge case), and the reauthentication flow needs a person.
         """
+        if isinstance(err, NetworkCertificateError):
+            # Never taken silently: an administrator confirms the new certificate
+            _LOGGER.warning(
+                "The console's certificate is not trusted (%s%s); confirm it with the repair"
+                " in Settings",
+                err,
+                f", SHA-256 {format_fingerprint(err.fingerprint)}" if err.fingerprint else "",
+            )
+            return ConfigEntryAuthFailed(
+                translation_domain=DOMAIN,
+                translation_key="certificate_not_trusted",
+                translation_placeholders={"error": str(err)},
+            )
         if isinstance(err, NetworkAuthError):
             self._auth_failures += 1
             if self._auth_failures >= AUTH_FAILURES_FOR_REAUTH:

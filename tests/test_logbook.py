@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_capture_events
+from pytest_homeassistant.common import MockConfigEntry, async_capture_events
 
 from homeassistant.core import Event, HomeAssistant
 

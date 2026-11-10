@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping
 
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import Unauthorized
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo, format_mac
 from homeassistant.helpers.entity import Entity
@@ -44,6 +45,20 @@ class NetworkPlusEntity(CoordinatorEntity[NetworkCoordinator]):
         gateway = coordinator.data.gateway
         self._attr_unique_id = f"{gateway.mac}_{key}"
         self._attr_device_info = gateway_device_info(gateway, entry.title)
+
+    async def async_require_admin(self) -> None:
+        """Refuse an action of a user without administrator rights.
+
+        The switch and the buttons write to the console with the admin
+        credentials; like the page, they are for administrators. Automations
+        and scripts act without a user and pass.
+        """
+        user_id = self._context.user_id if self._context is not None else None
+        if user_id is None:
+            return
+        user = await self.hass.auth.async_get_user(user_id)
+        if user is None or not user.is_admin:
+            raise Unauthorized(context=self._context)
 
 
 class UplinkEntity(NetworkPlusEntity):

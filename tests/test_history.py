@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from pytest_homeassistant.common import MockConfigEntry, async_fire_time_changed
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
@@ -136,14 +136,19 @@ async def test_remote_sessions(
 ) -> None:
     """A remote client opens a session when it appears and closes it when it leaves."""
     history = _history(setup_entry)
-    assert history.sessions == [
+    assert history.as_dict()["sessions"] == [
         {"at": "2023-11-14T22:13:20+00:00", "until": None, "type": "TELEPORT", "name": "Phone"}
     ]
     console.clients = [teleport_client(), {"type": "VPN", "display_name": "Laptop"}]
     freezer.tick(timedelta(minutes=1))
     await _poll(hass, setup_entry)
     joined = dt_util.utcnow().isoformat()
-    assert history.sessions[1] == {"at": joined, "until": None, "type": "VPN", "name": "Laptop"}
+    assert history.as_dict()["sessions"][1] == {
+        "at": joined,
+        "until": None,
+        "type": "VPN",
+        "name": "Laptop",
+    }
     console.clients = []
     freezer.tick(timedelta(minutes=1))
     await _poll(hass, setup_entry)
@@ -250,3 +255,60 @@ async def test_load_of_a_broken_store(
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     assert _history(config_entry).events == []
+
+
+async def test_remote_sessions_of_the_same_name(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """Two clients of the same name have a session each; one leaving closes only its own."""
+    history = _history(setup_entry)
+    console.clients = [
+        teleport_client(client_id="a"),
+        teleport_client(since=1_700_000_600, client_id="b"),
+    ]
+    freezer.tick(timedelta(minutes=1))
+    await _poll(hass, setup_entry)
+    # The client without an ID before is another one than these two
+    assert [s["until"] is None for s in history.sessions] == [False, True, True]
+    console.clients = [teleport_client(since=1_700_000_600, client_id="b")]
+    freezer.tick(timedelta(minutes=1))
+    await _poll(hass, setup_entry)
+    assert [s["until"] is None for s in history.sessions] == [False, False, True]
+
+
+async def test_old_session_without_a_match_closes(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """An open session from before keys were kept closes if two clients carry its name."""
+    history = _history(setup_entry)
+    for session in history.sessions:
+        session.pop("key", None)
+    console.clients = [teleport_client(client_id="a"), teleport_client(client_id="b")]
+    freezer.tick(timedelta(minutes=1))
+    await _poll(hass, setup_entry)
+    assert history.sessions[0]["until"] is not None
+    assert [s["until"] for s in history.sessions[1:]] == [None, None]
+
+
+async def test_old_session_goes_to_its_client(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """An open session from before keys were kept stays open for the one client it names."""
+    history = _history(setup_entry)
+    for session in history.sessions:
+        session.pop("key", None)
+    console.clients = [teleport_client(client_id="a")]
+    freezer.tick(timedelta(minutes=1))
+    await _poll(hass, setup_entry)
+    assert len(history.sessions) == 1
+    assert history.sessions[0]["until"] is None
+    assert history.sessions[0]["key"]

@@ -8,6 +8,8 @@ from typing import Any
 import probatio
 
 from homeassistant.config_entries import (
+    SOURCE_REAUTH,
+    SOURCE_RECONFIGURE,
     ConfigEntry,
     ConfigEntryState,
     ConfigFlow,
@@ -26,11 +28,19 @@ from homeassistant.helpers.selector import (
 )
 
 from . import create_client
-from .api import NetworkAuthError, NetworkClient, NetworkError
+from .api import (
+    NetworkAuthError,
+    NetworkClient,
+    NetworkError,
+    format_fingerprint,
+    normalize_fingerprint,
+)
 from .const import (
     CONF_ADMIN_PASSWORD,
     CONF_ADMIN_USERNAME,
     CONF_AUTO_OFF_MINUTES,
+    CONF_CERT_FINGERPRINT,
+    CONF_ENFORCED_AT,
     CONF_HISTORY_DAYS,
     CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
@@ -77,7 +87,6 @@ def _connection_schema() -> probatio.Schema:
             probatio.Required(CONF_HOST): str,
             probatio.Required(CONF_USERNAME): str,
             probatio.Required(CONF_PASSWORD): PASSWORD_SELECTOR,
-            probatio.Optional(CONF_VERIFY_SSL, default=True): bool,
             probatio.Optional(CONF_USE_ADMIN, default=False): bool,
         }
     )
@@ -93,12 +102,23 @@ def _admin_schema() -> probatio.Schema:
 
 
 class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Add a UniFi OS console."""
+    """Add a UniFi OS console.
+
+    The certificate is always checked. A console whose certificate the system
+    does not trust (UniFi OS makes its own) gets the certificate pinned, once
+    an administrator has entered its fingerprint, compared with the console.
+    """
 
     VERSION = 1
 
     _data: dict[str, Any]
     _reconfigure: bool = False
+    # The step waiting for the certificate, with its data, and the fingerprint
+    # the console presented
+    _pending: tuple[str, dict[str, Any]]
+    _presented: str = ""
+    # A fingerprint confirmed in this flow, by host
+    _confirmed: tuple[str, str] | None = None
 
     async def _async_validate(self, data: dict[str, Any]) -> Gateway:
         """Log in and find the gateway."""
@@ -127,6 +147,128 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
             errors["base"] = "no_gateway"
         return None
 
+    def _known_fingerprint(self, host: str) -> str | None:
+        """Return the fingerprint confirmed for ``host`` before: in this flow or in the entry."""
+        if self._confirmed is not None and self._confirmed[0] == host:
+            return self._confirmed[1]
+        if self.source in (SOURCE_RECONFIGURE, SOURCE_REAUTH):
+            entry = (
+                self._get_reconfigure_entry()
+                if self.source == SOURCE_RECONFIGURE
+                else self._get_reauth_entry()
+            )
+            if entry.data.get(CONF_HOST) == host and entry.data.get(CONF_CERT_FINGERPRINT):
+                return str(entry.data[CONF_CERT_FINGERPRINT])
+        return None
+
+    async def _async_connect(
+        self, step: str, data: dict[str, Any]
+    ) -> tuple[ConfigFlowResult | None, dict[str, str]]:
+        """Check the certificate, log in and go on; return the errors for the form of ``step``.
+
+        A certificate the system does not trust and that was not confirmed
+        for this host leads to the step that asks for its fingerprint.
+        """
+        data = {k: v for k, v in data.items() if k not in (CONF_CERT_FINGERPRINT, CONF_VERIFY_SSL)}
+        client = create_client(self.hass, data)
+        try:
+            presented = await client.untrusted_fingerprint()
+        except NetworkError:
+            return None, {"base": "cannot_connect"}
+        finally:
+            client.detach()
+        if presented is not None:
+            if presented != self._known_fingerprint(str(data[CONF_HOST])):
+                self._pending = (step, data)
+                self._presented = presented
+                return await self.async_step_certificate(), {}
+            data[CONF_CERT_FINGERPRINT] = presented
+        return await self._async_login(step, data)
+
+    async def _async_login(
+        self, step: str, data: dict[str, Any]
+    ) -> tuple[ConfigFlowResult | None, dict[str, str]]:
+        """Log in with ``data``, certificate settled, and go on with ``step``."""
+        errors: dict[str, str] = {}
+        if not (gateway := await self._async_try(data, errors)):
+            return None, errors
+        await self.async_set_unique_id(gateway.mac)
+        if step == "user":
+            self._abort_if_unique_id_configured()
+            self._data = {**data, "title": gateway.name}
+        else:
+            self._abort_if_unique_id_mismatch(reason="wrong_gateway")
+        if step in ("reauth", "reauth_confirm"):
+            entry = self._get_reauth_entry()
+            kept = {
+                k: v
+                for k, v in entry.data.items()
+                if k not in (CONF_CERT_FINGERPRINT, CONF_VERIFY_SSL)
+            }
+            return self.async_update_reload_and_abort(entry, data={**kept, **data}), {}
+        if step == "reconfigure":
+            entry = self._get_reconfigure_entry()
+            # What the entry remembers while the backup is enforced stays
+            kept = {
+                k: v
+                for k, v in entry.data.items()
+                if k not in data and k not in (*ADMIN_KEYS, CONF_CERT_FINGERPRINT, CONF_VERIFY_SSL)
+            }
+            self._data = {**kept, **data, "title": entry.title}
+        if data.get(CONF_USE_ADMIN):
+            return await self.async_step_admin(), {}
+        return self._async_finish(), {}
+
+    async def async_step_certificate(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for the fingerprint of the console's certificate, to compare and pin it."""
+        step, data = self._pending
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            entered = normalize_fingerprint(str(user_input[CONF_CERT_FINGERPRINT]))
+            if entered != self._presented:
+                errors["base"] = "fingerprint_mismatch"
+            else:
+                self._confirmed = (str(data[CONF_HOST]), entered)
+                result, failed = await self._async_login(
+                    step, {**data, CONF_CERT_FINGERPRINT: entered}
+                )
+                return result or self._async_show_step(step, failed, data)
+        return self.async_show_form(
+            step_id="certificate",
+            data_schema=probatio.Schema({probatio.Required(CONF_CERT_FINGERPRINT): str}),
+            description_placeholders={
+                "host": str(data[CONF_HOST]),
+                "fingerprint": format_fingerprint(self._presented),
+            },
+            errors=errors,
+        )
+
+    def _async_show_step(
+        self, step: str, errors: dict[str, str], values: dict[str, Any]
+    ) -> ConfigFlowResult:
+        """Show the form of ``step`` again, with ``errors``; passwords are never filled in."""
+        if step in ("reauth", "reauth_confirm"):
+            entry = self._get_reauth_entry()
+            return self.async_show_form(
+                step_id="reauth_confirm",
+                data_schema=probatio.Schema({probatio.Required(CONF_PASSWORD): PASSWORD_SELECTOR}),
+                description_placeholders={
+                    "host": entry.data[CONF_HOST],
+                    "username": entry.data[CONF_USERNAME],
+                },
+                errors=errors,
+            )
+        suggested = {
+            k: v for k, v in values.items() if k in (CONF_HOST, CONF_USERNAME, CONF_USE_ADMIN)
+        }
+        return self.async_show_form(
+            step_id=step,
+            data_schema=self.add_suggested_values_to_schema(_connection_schema(), suggested),
+            errors=errors,
+        )
+
     async def _async_validate_admin(self, data: dict[str, Any]) -> None:
         """Log in with the admin credentials and check that they may write."""
         client: NetworkClient = create_client(
@@ -150,24 +292,11 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for the console's address and a local user; admin features are an opt-in."""
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            data = {**user_input, CONF_HOST: user_input[CONF_HOST].strip()}
-            if gateway := await self._async_try(data, errors):
-                await self.async_set_unique_id(gateway.mac)
-                self._abort_if_unique_id_configured()
-                self._data = {**data, "title": gateway.name}
-                if data.get(CONF_USE_ADMIN):
-                    return await self.async_step_admin()
-                return self._async_finish()
-        return self.async_show_form(
-            step_id="user",
-            data_schema=self.add_suggested_values_to_schema(
-                _connection_schema(),
-                {k: v for k, v in (user_input or {}).items() if k != CONF_PASSWORD},
-            ),
-            errors=errors,
-        )
+        if user_input is None:
+            return self._async_show_step("user", {}, {})
+        data = {**user_input, CONF_HOST: user_input[CONF_HOST].strip()}
+        result, errors = await self._async_connect("user", data)
+        return result or self._async_show_step("user", errors, data)
 
     async def async_step_admin(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for the admin credentials, kept apart from the read-only ones."""
@@ -209,33 +338,39 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Change the address, the user, the certificate check or the admin opt-in."""
+        """Change the address, the user or the admin opt-in."""
         entry = self._get_reconfigure_entry()
         self._reconfigure = True
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            data = {**user_input, CONF_HOST: user_input[CONF_HOST].strip()}
-            if gateway := await self._async_try(data, errors):
-                await self.async_set_unique_id(gateway.mac)
-                self._abort_if_unique_id_mismatch(reason="wrong_gateway")
-                # What the entry remembers while the backup is enforced stays
-                kept = {
-                    k: v for k, v in entry.data.items() if k not in data and k not in ADMIN_KEYS
-                }
-                self._data = {**kept, **data, "title": entry.title}
-                if data.get(CONF_USE_ADMIN):
-                    return await self.async_step_admin()
-                return self._async_finish()
-        suggested = {k: v for k, v in entry.data.items() if k not in (CONF_PASSWORD, *ADMIN_KEYS)}
-        suggested[CONF_USE_ADMIN] = bool(entry.data.get(CONF_USE_ADMIN))
-        return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=self.add_suggested_values_to_schema(_connection_schema(), suggested),
-            errors=errors,
-        )
+        if user_input is None:
+            suggested = {k: v for k, v in entry.data.items() if k in (CONF_HOST, CONF_USERNAME)}
+            suggested[CONF_USE_ADMIN] = bool(entry.data.get(CONF_USE_ADMIN))
+            return self._async_show_step("reconfigure", {}, suggested)
+        data = {**user_input, CONF_HOST: user_input[CONF_HOST].strip()}
+        if not data.get(CONF_USE_ADMIN) and entry.data.get(CONF_ENFORCED_AT):
+            # Without the admin user nothing could switch the preferred uplink on again
+            return self._async_show_step("reconfigure", {"base": "backup_enforced"}, data)
+        result, errors = await self._async_connect("reconfigure", data)
+        return result or self._async_show_step("reconfigure", errors, data)
 
     async def async_step_reauth(self, entry_data: Mapping[str, Any]) -> ConfigFlowResult:
-        """The console rejected the login of the read-only user."""
+        """The console rejected the login of the read-only user, or its certificate changed.
+
+        A changed certificate is asked for first; the password only if the
+        login fails after that.
+        """
+        client = create_client(
+            self.hass, {k: v for k, v in entry_data.items() if k != CONF_CERT_FINGERPRINT}
+        )
+        try:
+            presented = await client.untrusted_fingerprint()
+        except NetworkError:
+            presented = None
+        finally:
+            client.detach()
+        if presented is not None and presented != entry_data.get(CONF_CERT_FINGERPRINT):
+            self._pending = ("reauth", dict(entry_data))
+            self._presented = presented
+            return await self.async_step_certificate()
         return await self.async_step_reauth_confirm()
 
     async def async_step_reauth_confirm(
@@ -243,24 +378,11 @@ class NetworkPlusConfigFlow(ConfigFlow, domain=DOMAIN):
     ) -> ConfigFlowResult:
         """Ask for the current password of the read-only user."""
         entry = self._get_reauth_entry()
-        errors: dict[str, str] = {}
-        if user_input is not None:
-            data = {**entry.data, CONF_PASSWORD: user_input[CONF_PASSWORD]}
-            if gateway := await self._async_try(data, errors):
-                await self.async_set_unique_id(gateway.mac)
-                self._abort_if_unique_id_mismatch(reason="wrong_gateway")
-                return self.async_update_reload_and_abort(
-                    entry, data_updates={CONF_PASSWORD: user_input[CONF_PASSWORD]}
-                )
-        return self.async_show_form(
-            step_id="reauth_confirm",
-            data_schema=probatio.Schema({probatio.Required(CONF_PASSWORD): PASSWORD_SELECTOR}),
-            description_placeholders={
-                "host": entry.data[CONF_HOST],
-                "username": entry.data[CONF_USERNAME],
-            },
-            errors=errors,
-        )
+        if user_input is None:
+            return self._async_show_step("reauth_confirm", {}, {})
+        data = {**entry.data, CONF_PASSWORD: user_input[CONF_PASSWORD]}
+        result, errors = await self._async_connect("reauth_confirm", data)
+        return result or self._async_show_step("reauth_confirm", errors, data)
 
     @staticmethod
     @callback

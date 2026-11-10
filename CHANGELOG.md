@@ -2,6 +2,29 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] - 2026-11-10
+
+### Changed
+
+- **The certificate of the console is always checked; the option "Verify the certificate" is gone.** A console with its own certificate (as UniFi OS makes one) gets it pinned: setup shows its SHA-256 fingerprint and asks to enter it, compared with the console. A changed certificate is never taken by itself: the entities become unavailable, the log names the new fingerprint and Home Assistant asks again. An entry that had the check off pins the certificate the console presents at the first start after the update and logs its fingerprint; compare it, and use Reconfigure if it is not the console's.
+- The switch "Enforce backup uplink" and the two speed test buttons are for administrators of Home Assistant only, like the page; automations and scripts may still use them. A user without administrator rights gets an error.
+- The addresses of the event `public_ip_changed` (`address`, `previous`) reach automations but are no longer kept by the recorder, the logbook or backups.
+- "Enforce backup uplink" refuses near the data plan also while the console's data limit is turned off, by the plan size the console still reports.
+- The page is built from Home Assistant's own elements (cards, alerts, icon buttons) and shows the version of the integration at the bottom; its address carries a hash of the file, so a browser never shows an old page after an update.
+- Requires Home Assistant 2026.11. Installation through the Marketplace.
+
+### Fixed
+
+- The uplink could stay off when the console took "Enforce backup uplink" but its answer or the check after it failed (a timeout, a server error): the timer to switch back is now armed before the write, and the speed test over the backup switches back in that case too.
+- At the end of the set time the uplink stayed off when its state was not known at that moment; it is now switched on all the same.
+- Withdrawing the admin features while the backup was enforced left the uplink off for good; Reconfigure now refuses that until the switch is off.
+- An attempt the console refused, or an uplink switched on again in UniFi Network, left the start behind: the switch showed old times, and a later restart could switch the uplink on against a setting made in the console. The start is now forgotten in both cases, and the switch shows its times only while on.
+- A reload during a speed test over the backup switches the uplink on before the sessions close, instead of failing and waiting for the timer.
+- A drill begins before the write, so a fast failover is not missed; an attempt the console refused keeps the last real drill.
+- After a refusal before the first request, the button "Run speed test over backup uplink" no longer stays in progress.
+- Choosing another console on the page while it was loading went back to the first one.
+- Two remote clients of the same name were one session on the page; sessions now follow the client.
+
 ## [0.8.0] - 2026-11-02
 
 ### Added

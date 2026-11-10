@@ -16,16 +16,21 @@ from homeassistant.components.websocket_api.connection import ActiveConnection
 from homeassistant.components.websocket_api.decorators import require_admin, websocket_command
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.loader import async_get_integration
+from homeassistant.util.hass_dict import HassKey
 
 from .const import DOMAIN
 from .coordinator import NetworkConfigEntry
 from .entity import expected_speed
 from .model import LteBackup, NetworkState, Uplink
 
+# The version of the integration, as manifest.json has it; the page shows it at the bottom
+DATA_VERSION: HassKey[str] = HassKey(f"{DOMAIN}_version")
 
-@callback
-def async_register_websocket(hass: HomeAssistant) -> None:
+
+async def async_register_websocket(hass: HomeAssistant) -> None:
     """Register the command."""
+    hass.data[DATA_VERSION] = str((await async_get_integration(hass, DOMAIN)).version)
     async_register_command(hass, websocket_overview)
 
 
@@ -69,7 +74,10 @@ def websocket_overview(
             "backup_enforced": runtime.coordinator.backup_enforced,
             "history": runtime.history.as_dict(),
         }
-    connection.send_result(msg["id"], {"consoles": consoles, "console": console})
+    connection.send_result(
+        msg["id"],
+        {"consoles": consoles, "console": console, "version": hass.data.get(DATA_VERSION)},
+    )
 
 
 def state_dict(entry: NetworkConfigEntry, state: NetworkState) -> dict[str, Any]:

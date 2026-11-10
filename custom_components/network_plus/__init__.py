@@ -5,12 +5,14 @@ A config entry is one UniFi OS console with its gateway.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 
 from aiohttp import DummyCookieJar
 
 from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -19,10 +21,11 @@ from homeassistant.helpers import (
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.typing import ConfigType
 
-from .api import NetworkAuthError, NetworkClient, NetworkError
+from .api import NetworkAuthError, NetworkClient, NetworkError, format_fingerprint
 from .const import (
     CONF_ADMIN_PASSWORD,
     CONF_ADMIN_USERNAME,
+    CONF_CERT_FINGERPRINT,
     CONF_HISTORY_DAYS,
     CONF_USE_ADMIN,
     DEFAULT_HISTORY_DAYS,
@@ -49,27 +52,71 @@ PLATFORMS: list[Platform] = [
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the WebSocket command of the page."""
-    async_register_websocket(hass)
+    await async_register_websocket(hass)
     return True
 
 
-def create_client(hass: HomeAssistant, data: dict[str, object]) -> NetworkClient:
-    """Return a client with its own session; the client keeps the login token itself."""
+def create_client(hass: HomeAssistant, data: Mapping[str, object]) -> NetworkClient:
+    """Return a client with its own session; the client keeps the login token itself.
+
+    The certificate is always checked: against the pinned fingerprint if the
+    entry has one, else against the certificates the system trusts.
+    """
     session = async_create_clientsession(
         hass,
-        verify_ssl=bool(data.get(CONF_VERIFY_SSL, True)),
         # The console deletes the token cookie with every 401, also with a late
         # one after a new login; the client sends the token itself
         cookie_jar=DummyCookieJar(),
     )
     return NetworkClient(
-        session, str(data[CONF_HOST]), str(data[CONF_USERNAME]), str(data[CONF_PASSWORD])
+        session,
+        str(data[CONF_HOST]),
+        str(data[CONF_USERNAME]),
+        str(data[CONF_PASSWORD]),
+        fingerprint=str(data.get(CONF_CERT_FINGERPRINT) or "") or None,
+    )
+
+
+async def _async_pin_unchecked_certificate(hass: HomeAssistant, entry: NetworkConfigEntry) -> None:
+    """Pin the certificate of an entry made while the check could be turned off.
+
+    Such an entry took any certificate; from now on it takes only the one the
+    console presents now, which is never less safe than before. A certificate
+    the system trusts is checked as such and not pinned. Logged, so an
+    administrator can compare it with the console.
+    """
+    client = create_client(hass, entry.data)
+    try:
+        fingerprint = await client.untrusted_fingerprint()
+    except NetworkError as err:
+        raise ConfigEntryNotReady(f"certificate of the console not readable: {err}") from err
+    finally:
+        client.detach()
+    data = {k: v for k, v in entry.data.items() if k != CONF_VERIFY_SSL}
+    if fingerprint is None:
+        # A certificate the system trusts: nothing to pin
+        hass.config_entries.async_update_entry(entry, data=data)
+        return
+    data[CONF_CERT_FINGERPRINT] = fingerprint
+    hass.config_entries.async_update_entry(entry, data=data)
+    _LOGGER.warning(
+        "%s: the certificate check was off; the certificate the console presents now is pinned"
+        " (SHA-256 %s). If that is not the console's, use Reconfigure",
+        entry.title,
+        format_fingerprint(fingerprint),
     )
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> bool:
     """Set up one console."""
-    client = create_client(hass, dict(entry.data))
+    if CONF_VERIFY_SSL in entry.data:
+        if entry.data[CONF_VERIFY_SSL] is False and CONF_CERT_FINGERPRINT not in entry.data:
+            await _async_pin_unchecked_certificate(hass, entry)
+        else:
+            hass.config_entries.async_update_entry(
+                entry, data={k: v for k, v in entry.data.items() if k != CONF_VERIFY_SSL}
+            )
+    client = create_client(hass, entry.data)
     # Home Assistant detaches the session with the entry as well, also after
     # a failed setup; this makes it visible and independent of that
     entry.async_on_unload(client.detach)
@@ -132,7 +179,12 @@ async def _async_check_admin(coordinator: NetworkCoordinator, admin_client: Netw
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> bool:
-    """Unload one console; the websocket task ends with the entry."""
+    """Unload one console; the websocket task ends with the entry.
+
+    A running speed test over the backup uplink ends first, while the admin
+    session still stands, so it switches the preferred uplink on again.
+    """
+    await entry.runtime_data.coordinator.async_stop_backup_speedtest()
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 

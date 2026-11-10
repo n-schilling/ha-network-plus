@@ -20,6 +20,7 @@ from custom_components.network_plus.api import (
     NetworkError,
     NetworkPermissionError,
     NetworkServerError,
+    NetworkWriteUnknownError,
     find_gateway,
     find_lte_devices,
     is_lte_device,
@@ -473,6 +474,31 @@ async def test_set_wan_type_errors() -> None:
     with pytest.raises(NetworkError, match=r"write refused \(unexpected answer\)"):
         await client.set_wan_type("net-wan", "disabled")
     with pytest.raises(NetworkPermissionError):
+        await client.set_wan_type("net-wan", "disabled")
+
+
+async def test_set_wan_type_outcome_unknown() -> None:
+    """A write that may have reached the console is reported as such, not as refused."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    network = FakeResponse(200, {"data": [{"_id": "net-wan", "wan_type": "dhcp"}]})
+    session.gets[NETCONF] = [
+        network,
+        FakeResponse(200, {"data": [{"_id": "net-wan", "wan_type": "dhcp"}]}),
+        FakeResponse(502, path=NETCONF),
+        FakeResponse(200, {"data": [{"_id": "net-wan", "wan_type": "dhcp"}]}),
+    ]
+    session.puts[NETCONF] = [
+        ClientError("timeout"),
+        FakeResponse(200, {"meta": {"rc": "ok"}}),
+        FakeResponse(503, path=NETCONF),
+    ]
+    client = _client(session)
+    with pytest.raises(NetworkWriteUnknownError, match="timeout"):
+        await client.set_wan_type("net-wan", "disabled")
+    with pytest.raises(NetworkWriteUnknownError, match="written, not read back"):
+        await client.set_wan_type("net-wan", "disabled")
+    with pytest.raises(NetworkWriteUnknownError, match="HTTP 503"):
         await client.set_wan_type("net-wan", "disabled")
 
 

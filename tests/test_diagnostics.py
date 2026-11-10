@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import json
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
 
 from custom_components.network_plus.api import NetworkError
+from custom_components.network_plus.const import CONF_CERT_FINGERPRINT
 from custom_components.network_plus.diagnostics import async_get_config_entry_diagnostics
 
-from .conftest import HOST, IPV4, IPV6, LTE_MAC, MAC, FakeConsole
+from .conftest import FINGERPRINT, HOST, IPV4, IPV6, LTE_MAC, MAC, FakeConsole
 
 
 async def test_diagnostics_hold_nothing_personal(
@@ -79,3 +80,17 @@ async def test_diagnostics_without_lte_and_clients(
     result = await async_get_config_entry_diagnostics(hass, config_entry)
     assert result["lte"] == []
     assert result["vpn_clients"] is None
+
+
+async def test_diagnostics_hide_the_pinned_certificate(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """The pinned fingerprint identifies the console; it stays out like the address."""
+    config_entry.add_to_hass(hass)
+    hass.config_entries.async_update_entry(
+        config_entry, data={**config_entry.data, CONF_CERT_FINGERPRINT: FINGERPRINT}
+    )
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    result = await async_get_config_entry_diagnostics(hass, config_entry)
+    assert FINGERPRINT not in json.dumps(result)

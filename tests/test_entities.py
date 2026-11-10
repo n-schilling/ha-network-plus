@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from aiohttp import DummyCookieJar
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -595,6 +595,9 @@ async def test_public_ip_change_event(
     assert event.attributes["family"] == "ipv4"  # type: ignore[union-attr]
     assert event.attributes["address"] == "198.51.100.8"  # type: ignore[union-attr]
     assert event.attributes["previous"] == IPV4  # type: ignore[union-attr]
+    # Automations get the addresses; the recorder does not keep them
+    entity = hass.data["entity_components"]["event"].get_entity(EVENT)
+    assert {"address", "previous"} <= entity._Entity__combined_unrecorded_attributes
 
 
 async def test_clients_not_readable(

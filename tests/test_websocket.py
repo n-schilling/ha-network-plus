@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import re
 
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-from pytest_homeassistant_custom_component.typing import WebSocketGenerator
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.typing import WebSocketGenerator
 
 from homeassistant.components.frontend import DATA_PANELS
 from homeassistant.core import HomeAssistant
@@ -84,7 +85,11 @@ async def test_overview_unknown_unloaded_and_none(
     await hass.config_entries.async_remove(setup_entry.entry_id)
     await hass.async_block_till_done()
     await client.send_json_auto_id({"type": "network_plus/overview"})
-    assert (await client.receive_json())["result"] == {"consoles": [], "console": None}
+    assert (await client.receive_json())["result"] == {
+        "consoles": [],
+        "console": None,
+        "version": _version(),
+    }
 
 
 async def test_overview_without_clients_and_lte_limit(
@@ -137,7 +142,8 @@ async def test_panel_stays_through_a_reload_and_goes_with_the_last_console(
     panel = hass.data[DATA_PANELS][PANEL_URL_PATH]
     assert panel.require_admin is True
     assert panel.config["_panel_custom"]["name"] == "network-plus-panel"
-    assert panel.config["_panel_custom"]["module_url"].endswith(f"?v={_version()}")
+    digest = hashlib.sha256(PANEL.read_bytes()).hexdigest()[:12]
+    assert panel.config["_panel_custom"]["module_url"].endswith(f"?v={digest}")
     await hass.config_entries.async_reload(first.entry_id)
     await hass.async_block_till_done()
     assert hass.data[DATA_PANELS][PANEL_URL_PATH] is panel
@@ -154,11 +160,11 @@ def _version() -> str:
 
 
 def test_panel_script() -> None:
-    """The script defines the element, asks the command and logs the release it came with."""
+    """The script defines the element and asks the command; the version comes from there."""
     code = PANEL.read_text(encoding="utf-8")
     assert 'customElements.define("network-plus-panel"' in code
     assert '"network_plus/overview"' in code
-    match = re.search(r'const VERSION = "([^"]+)"', code)
-    assert match is not None and match.group(1) == _version()
+    # manifest.json is the one place of the version
+    assert re.search(r"\d+\.\d+\.\d+", code.replace("@mdi/js", "")) is None
     # Everything comes from Home Assistant: no requests of its own
     assert "fetch(" not in code and "http" not in code.replace("https://github.com", "")

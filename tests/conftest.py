@@ -10,9 +10,9 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
-from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME, CONF_VERIFY_SSL
+from homeassistant.const import CONF_HOST, CONF_PASSWORD, CONF_USERNAME
 from homeassistant.core import HomeAssistant
 
 from custom_components.network_plus.api import NetworkError, find_gateway
@@ -35,8 +35,9 @@ ENTRY_DATA = {
     CONF_HOST: HOST,
     CONF_USERNAME: USERNAME,
     CONF_PASSWORD: PASSWORD,
-    CONF_VERIFY_SSL: True,
 }
+# The SHA-256 fingerprint of a made-up self-signed certificate of the console
+FINGERPRINT = "ab" * 32
 TRANSITION = 1_700_000_000_000  # ms
 ADMIN_DATA = {
     CONF_USE_ADMIN: True,
@@ -216,9 +217,14 @@ def lte_report_row(day: datetime, used: float, mac: str = LTE_MAC) -> dict[str, 
     }
 
 
-def teleport_client(name: str = "Phone", since: int = 1_700_000_000) -> dict[str, Any]:
+def teleport_client(
+    name: str = "Phone", since: int = 1_700_000_000, client_id: str | None = None
+) -> dict[str, Any]:
     """Return a connected Teleport client as the console lists it."""
-    return {"type": "TELEPORT", "display_name": name, "assoc_time": since, "status": "online"}
+    client = {"type": "TELEPORT", "display_name": name, "assoc_time": since, "status": "online"}
+    if client_id is not None:
+        client["id"] = client_id
+    return client
 
 
 def sync(raw: dict[str, Any], message: str = "device:sync") -> dict[str, Any]:
@@ -258,6 +264,13 @@ class FakeConsole:
         self.listening = asyncio.Event()
         self.listen_calls = 0
         self.created_with: list[tuple[str, str, str]] = []
+        # The pinned fingerprint each client was created with
+        self.pinned: list[str | None] = []
+        # The certificate: None while the system trusts it, else its fingerprint
+        self.presented: str | None = None
+        self.certificate_error: Exception | None = None
+        # A write the console takes, but whose answer or check fails
+        self.write_unknown: Exception | None = None
         # The LTE reports a billing day other than the 1st needs, by interval
         self.timezone: str | None = "Europe/Berlin"
         self.reports: dict[str, list[dict[str, Any]]] = {"daily": [], "monthly": []}
@@ -312,6 +325,16 @@ class FakeConsole:
             raise self.error
         return "admin" in self.permissions.get("network.management", [])
 
+    async def untrusted_fingerprint(self) -> str | None:
+        if self.certificate_error:
+            raise self.certificate_error
+        return self.presented
+
+    async def get_fingerprint(self) -> str:
+        if self.certificate_error:
+            raise self.certificate_error
+        return self.presented or FINGERPRINT
+
     async def set_wan_type(self, network_id: str, wan_type: str) -> str:
         if self.write_error:
             raise self.write_error
@@ -319,6 +342,8 @@ class FakeConsole:
         for config in self.configs:
             if config.get("_id") == network_id:
                 config["wan_type"] = wan_type
+                if self.write_unknown:
+                    raise self.write_unknown
                 return wan_type
         return ""
 
@@ -353,18 +378,16 @@ class FakeConsole:
         await hass.async_block_till_done()
 
 
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
-    """Load the integration from custom_components."""
-
-
 @pytest.fixture
 def console() -> Generator[FakeConsole]:
     """Replace the client by the simulated console."""
     fake = FakeConsole()
 
-    def factory(_session: Any, host: str, username: str, password: str) -> FakeConsole:
+    def factory(
+        _session: Any, host: str, username: str, password: str, fingerprint: str | None = None
+    ) -> FakeConsole:
         fake.created_with.append((host, username, password))
+        fake.pinned.append(fingerprint)
         return fake
 
     with patch("custom_components.network_plus.NetworkClient", side_effect=factory):

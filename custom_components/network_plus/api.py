@@ -14,10 +14,13 @@ import json
 from typing import Any
 
 from aiohttp import (
+    ClientConnectorCertificateError,
     ClientError,
     ClientResponse,
     ClientSession,
     ClientTimeout,
+    Fingerprint,
+    ServerFingerprintMismatch,
     WSMsgType,
     WSServerHandshakeError,
 )
@@ -58,6 +61,40 @@ class NetworkPermissionError(NetworkError):
     """The console refused a write: the user may not change the configuration."""
 
 
+class NetworkCertificateError(NetworkError):
+    """The console's certificate is not trusted: no valid chain, or not the pinned one.
+
+    ``fingerprint`` is the SHA-256 fingerprint of the certificate the console
+    presented, as lowercase hex, when it is known.
+    """
+
+    def __init__(self, message: str, fingerprint: str | None = None) -> None:
+        """Initialize the error."""
+        super().__init__(message)
+        self.fingerprint = fingerprint
+
+
+class NetworkWriteUnknownError(NetworkError):
+    """A write went out, but whether the console took it is not known.
+
+    The request timed out or the answer, or the check after it, failed: the
+    console may have changed the configuration all the same.
+    """
+
+
+def normalize_fingerprint(value: str) -> str:
+    """Return a SHA-256 fingerprint as lowercase hex without separators; "" if it is none."""
+    digits = "".join(value.split()).replace(":", "").lower()
+    if len(digits) != 64 or any(c not in "0123456789abcdef" for c in digits):
+        return ""
+    return digits
+
+
+def format_fingerprint(value: str) -> str:
+    """Return a fingerprint the way browsers show it: uppercase byte pairs with colons."""
+    return ":".join(value[i : i + 2] for i in range(0, len(value), 2)).upper()
+
+
 class NetworkClient:
     """Read the gateway and its uplinks; one login session per client."""
 
@@ -68,9 +105,17 @@ class NetworkClient:
         username: str,
         password: str,
         site: str = SITE,
+        fingerprint: str | None = None,
     ) -> None:
-        """Initialize the client; ``session`` should keep no cookies, the client sends the token."""
+        """Initialize the client; ``session`` should keep no cookies, the client sends the token.
+
+        With ``fingerprint`` (SHA-256, hex) the console's certificate must be
+        exactly that one; without, it must have a chain the system trusts.
+        """
         self._session = session
+        self._ssl: Fingerprint | bool = (
+            Fingerprint(bytes.fromhex(fingerprint)) if fingerprint else True
+        )
         self._host = host
         self._username = username
         self._password = password
@@ -102,6 +147,7 @@ class NetworkClient:
                     f"{self._base}/api/auth/login",
                     json={"username": self._username, "password": self._password},
                     timeout=TIMEOUT,
+                    ssl=self._ssl,
                 ) as resp:
                     if resp.status in (400, 401, 403):
                         # The console answers wrong credentials with 403 and an
@@ -123,7 +169,7 @@ class NetworkClient:
                     self._token = cookie.value
                     self._remember_csrf(resp)
             except (ClientError, TimeoutError) as err:
-                raise NetworkError(_describe(err)) from err
+                raise _network_error(err) from err
             self._logged_in = True
             self._login_generation += 1
 
@@ -150,7 +196,12 @@ class NetworkClient:
                 headers[CSRF_HEADER] = self._csrf
             try:
                 async with self._session.request(
-                    method, f"{self._base}{path}", json=body, headers=headers, timeout=TIMEOUT
+                    method,
+                    f"{self._base}{path}",
+                    json=body,
+                    headers=headers,
+                    timeout=TIMEOUT,
+                    ssl=self._ssl,
                 ) as resp:
                     if resp.status == 401:
                         self._session_rejected(generation)
@@ -166,7 +217,7 @@ class NetworkClient:
                     except ValueError as err:
                         raise NetworkError(f"{path}: no JSON in the answer") from err
             except (ClientError, TimeoutError) as err:
-                raise NetworkError(_describe(err)) from err
+                raise _network_error(err) from err
         raise NetworkError("unreachable")  # pragma: no cover
 
     async def _get(self, path: str) -> Any:
@@ -255,9 +306,21 @@ class NetworkClient:
         """
         path = f"/proxy/network/api/s/{self._site}/rest/networkconf/{network_id}"
         network = await self._get_network(path, network_id)
-        answer = await self._request("PUT", path, {**network, "wan_type": wan_type})
+        try:
+            answer = await self._request("PUT", path, {**network, "wan_type": wan_type})
+        except NetworkAuthError, NetworkPermissionError, NetworkCertificateError:
+            # Refused before the console looked at the change
+            raise
+        except NetworkError as err:
+            # A timeout or a server error: the console may have taken it all the same
+            raise NetworkWriteUnknownError(f"networkconf {network_id}: {err}") from err
         _check_accepted(answer, f"networkconf {network_id}: write refused")
-        return str((await self._get_network(path, network_id)).get("wan_type") or "")
+        try:
+            return str((await self._get_network(path, network_id)).get("wan_type") or "")
+        except NetworkError as err:
+            raise NetworkWriteUnknownError(
+                f"networkconf {network_id}: written, not read back ({err})"
+            ) from err
 
     async def start_speedtest(self, mac: str) -> None:
         """Start a speed test on the gateway with ``mac``; it runs over the active uplink.
@@ -280,6 +343,39 @@ class NetworkClient:
             raise NetworkError(f"networkconf {network_id}: unexpected answer")
         return data[0]
 
+    async def untrusted_fingerprint(self) -> str | None:
+        """Return None if the system trusts the console's certificate, else its fingerprint.
+
+        The fingerprint is the SHA-256 one, as hex, of the certificate the
+        console presents; it is for an administrator to confirm.
+        """
+        try:
+            async with self._session.get(f"{self._base}/", timeout=TIMEOUT, ssl=True):
+                return None
+        except ClientConnectorCertificateError:
+            return await self.get_fingerprint()
+        except (ClientError, TimeoutError) as err:
+            raise NetworkError(_describe(err)) from err
+
+    async def get_fingerprint(self) -> str:
+        """Return the SHA-256 fingerprint of the certificate the console presents, as hex.
+
+        The connection is made with a fingerprint that cannot match, so it
+        fails right after the handshake and nothing is sent; the error carries
+        the certificate's fingerprint.
+        """
+        try:
+            async with self._session.get(
+                f"{self._base}/", timeout=TIMEOUT, ssl=Fingerprint(bytes(32))
+            ):
+                pass  # pragma: no cover
+        except ServerFingerprintMismatch as err:
+            return err.got.hex()
+        except (ClientError, TimeoutError) as err:
+            raise NetworkError(_describe(err)) from err
+        # Unreachable: no certificate matches a fingerprint of zeros
+        raise NetworkError("the console presented no certificate")  # pragma: no cover
+
     def detach(self) -> None:
         """Give the session's connector back; for a client that is no longer needed."""
         self._session.detach()
@@ -301,7 +397,7 @@ class NetworkClient:
         url = f"wss://{self._host}/proxy/network/wss/s/{self._site}/events?clients=v2"
         try:
             async with self._session.ws_connect(
-                url, heartbeat=HEARTBEAT, headers=self._auth_headers()
+                url, heartbeat=HEARTBEAT, headers=self._auth_headers(), ssl=self._ssl
             ) as ws:
                 if on_connect is not None:
                     on_connect()
@@ -319,7 +415,7 @@ class NetworkClient:
                 self._session_rejected(generation)
             raise NetworkError(f"websocket refused (HTTP {err.status})") from err
         except (ClientError, TimeoutError) as err:
-            raise NetworkError(_describe(err)) from err
+            raise _network_error(err) from err
 
 
 def find_gateway(devices: list[dict[str, Any]], mac: str | None = None) -> dict[str, Any] | None:
@@ -368,3 +464,14 @@ def _raise_for_status(resp: ClientResponse) -> None:
 
 def _describe(err: BaseException) -> str:
     return str(err) or type(err).__name__
+
+
+def _network_error(err: BaseException) -> NetworkError:
+    """Return the error for a failed connection; a distrusted certificate gets its own."""
+    if isinstance(err, ServerFingerprintMismatch):
+        return NetworkCertificateError(
+            "the console presented another certificate than the pinned one", err.got.hex()
+        )
+    if isinstance(err, ClientConnectorCertificateError):
+        return NetworkCertificateError(f"the console's certificate is not trusted ({err})")
+    return NetworkError(_describe(err))

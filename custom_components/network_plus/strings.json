@@ -7,31 +7,27 @@
           "host": "Host",
           "username": "Username",
           "password": "Password",
-          "verify_ssl": "Verify the certificate",
           "use_admin": "Use admin features"
         },
         "data_description": {
           "host": "IP address or host name of the console, for example 192.168.1.1.",
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
-          "verify_ssl": "Turn off only if the console uses its own self-signed certificate.",
           "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console, and the buttons \"Run speed test\" and \"Run speed test over backup uplink\". Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
       "reconfigure": {
-        "description": "Change the address, the user or the certificate check.",
+        "description": "Change the address, the user or the admin opt-in.",
         "data": {
           "host": "Host",
           "username": "Username",
           "password": "Password",
-          "verify_ssl": "Verify the certificate",
           "use_admin": "Use admin features"
         },
         "data_description": {
           "host": "IP address or host name of the console, for example 192.168.1.1.",
           "username": "A local user of the console, not a UI.com account.",
           "password": "The password of that user.",
-          "verify_ssl": "Turn off only if the console uses its own self-signed certificate.",
           "use_admin": "For the switch \"Enforce backup uplink\", which switches the preferred uplink off in the console, and the buttons \"Run speed test\" and \"Run speed test over backup uplink\". Asks for separate admin credentials in the next step; without them the integration never writes."
         }
       },
@@ -42,6 +38,16 @@
         },
         "data_description": {
           "password": "The password of the local user."
+        }
+      },
+      "certificate": {
+        "title": "Certificate of the console",
+        "description": "The console at {host} presents a certificate that the system does not trust; a UniFi OS console makes one for itself. Its SHA-256 fingerprint is:\n\n`{fingerprint}`\n\nCompare it with the certificate the console shows, for example in a browser on the console's address (the lock or warning icon in the address bar → certificate details), and enter it below. Home Assistant then accepts this certificate only; if it changes, you are asked again.",
+        "data": {
+          "certificate_fingerprint": "SHA-256 fingerprint"
+        },
+        "data_description": {
+          "certificate_fingerprint": "As the browser shows it, with or without colons."
         }
       },
       "admin": {
@@ -58,15 +64,17 @@
       }
     },
     "error": {
-      "cannot_connect": "The console does not answer. Check the address and, if the console has a self-signed certificate, the certificate check.",
+      "cannot_connect": "The console does not answer. Check the address.",
       "invalid_auth": "The console rejected the username or the password.",
       "no_gateway": "The console has no gateway in its UniFi Network application.",
       "admin_invalid_auth": "The console rejected the admin credentials.",
-      "not_admin": "This user may not change the Network configuration. It needs the admin role for the Network application."
+      "not_admin": "This user may not change the Network configuration. It needs the admin role for the Network application.",
+      "fingerprint_mismatch": "This is not the fingerprint of the certificate the console presents. If you copied it correctly, another device answers at this address.",
+      "backup_enforced": "The backup uplink is enforced right now. Switch \"Enforce backup uplink\" off first; without the admin features nothing could switch the preferred uplink on again."
     },
     "abort": {
       "already_configured": "This gateway is already set up.",
-      "reauth_successful": "The password was updated.",
+      "reauth_successful": "The console was updated.",
       "reconfigure_successful": "The console was updated.",
       "wrong_gateway": "This console has a different gateway than the one set up."
     }
@@ -187,6 +195,12 @@
     },
     "speedtest_not_started": {
       "message": "The console did not start the speed test: {error}"
+    },
+    "certificate_not_trusted": {
+      "message": "The console's certificate is not trusted ({error}). Confirm the certificate with the repair in Settings."
+    },
+    "console_write_unknown": {
+      "message": "The console did not confirm the change ({error}); the switch shows within a minute whether it took it."
     }
   },
   "options": {
@@ -222,7 +236,7 @@
     },
     "lte_limit_disabled": {
       "title": "{title}: LTE data limit turned off",
-      "description": "The data limit of {name} is turned off in UniFi Network. The sensor \"LTE data used\" stays unknown, and the switch \"Enforce backup uplink\" cannot refuse near the limit. Turn the limit on in UniFi Network under the LTE device's settings, or ignore this issue if you do not want one."
+      "description": "The data limit of {name} is turned off in UniFi Network. The sensor \"LTE data used\" stays unknown. The switch \"Enforce backup uplink\" still refuses near the plan size set there, as long as the console reports one. Turn the limit on in UniFi Network under the LTE device's settings, or ignore this issue if you do not want one."
     },
     "admin_not_allowed": {
       "title": "{title}: admin user cannot write",

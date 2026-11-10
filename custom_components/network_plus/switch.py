@@ -59,8 +59,8 @@ class EnforceBackupSwitch(NetworkPlusEntity, SwitchEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return when the enforcing started and when it ends by itself."""
-        started = self.coordinator.enforced_at
+        """Return when the enforcing started and when it ends by itself; None while off."""
+        started = self.coordinator.enforced_at if self.is_on else None
         return {
             "enforced_since": started.isoformat() if started else None,
             "auto_off_at": (started + self.coordinator.auto_off).isoformat() if started else None,
@@ -68,8 +68,10 @@ class EnforceBackupSwitch(NetworkPlusEntity, SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Switch the preferred uplink off, unless that would be unwise."""
+        await self.async_require_admin()
         await self.coordinator.async_enforce_backup()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Switch the preferred uplink on again."""
+        await self.async_require_admin()
         await self.coordinator.async_release_backup()

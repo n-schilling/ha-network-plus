@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
+import hashlib
 import ipaddress
 import logging
 import math
@@ -158,6 +159,20 @@ class LteBackup:
     def highest_percent(self) -> float | None:
         """Return the higher of the billing period's share and the console's monthly share."""
         values = [v for v in (self.usage_percent, self.month_percent) if v is not None]
+        return max(values) if values else None
+
+    @property
+    def guard_percent(self) -> float | None:
+        """Return the higher share for the guard of "Enforce backup uplink".
+
+        Unlike the shares above, it counts also while the console's data limit
+        is turned off, as long as the console still reports the plan's size.
+        """
+        values = [
+            used / self.hard_limit * 100
+            for used in (self.plan_bytes, self.usage_bytes)
+            if used is not None and self.hard_limit
+        ]
         return max(values) if values else None
 
     def _percent(self, used: int | None) -> float | None:
@@ -416,6 +431,9 @@ class VpnClient:
     name: str
     type: str
     since: datetime | None
+    # Tells two clients of the same name apart: a hash of the console's ID of
+    # the client, never shown and never the ID itself
+    key: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -587,15 +605,25 @@ def parse_clients(clients: list[Any]) -> tuple[VpnClient, ...]:
         # The console's history lists remote clients with status "offline"
         if str(client.get("status") or "").lower() == "offline":
             continue
-        name = client.get("display_name") or client.get("name") or client.get("hostname")
+        name = str(
+            client.get("display_name") or client.get("name") or client.get("hostname") or kind
+        )
+        ident = client.get("id") or client.get("_id") or client.get("mac")
         remote.append(
             VpnClient(
-                name=str(name or kind),
+                name=name,
                 type=kind,
                 since=_timestamp_s(client.get("assoc_time")),
+                key=client_key(kind, str(ident) if ident else None, name),
             )
         )
     return tuple(sorted(remote, key=lambda c: (c.type, c.name)))
+
+
+def client_key(kind: str, ident: str | None, name: str) -> str:
+    """Return the key of a remote client: from its ID if the console gives one, else its name."""
+    source = f"id|{ident}" if ident else f"name|{name}"
+    return hashlib.sha256(f"{kind}|{source}".encode()).hexdigest()[:16]
 
 
 # Key of the last known active uplink in the dict ``detect_active_events`` keeps

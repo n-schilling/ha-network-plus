@@ -47,6 +47,7 @@ class SpeedtestButton(NetworkPlusEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         """Start the speed test."""
+        await self.async_require_admin()
         await self.coordinator.async_start_speedtest()
 
 
@@ -77,4 +78,5 @@ class BackupSpeedtestButton(NetworkPlusEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         """Start the measurement, unless that would be unwise."""
+        await self.async_require_admin()
         await self.coordinator.async_start_backup_speedtest()

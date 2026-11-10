@@ -9,18 +9,19 @@ from unittest.mock import patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from pytest_homeassistant.common import MockConfigEntry, MockUser, async_fire_time_changed
 
 from homeassistant.components.button import DOMAIN as BUTTON_DOMAIN, SERVICE_PRESS
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError, Unauthorized
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 
 from custom_components.network_plus.api import (
     NetworkAuthError,
     NetworkError,
     NetworkPermissionError,
+    NetworkWriteUnknownError,
 )
 from custom_components.network_plus.const import CONF_DRILL, DOMAIN, ISSUE_ADMIN
 
@@ -314,3 +315,78 @@ async def test_wait_returns_at_once_when_already_true(
     """A condition that already holds needs no state change."""
     coordinator = setup_admin_entry.runtime_data.coordinator
     assert await coordinator._async_wait(lambda _s: True, 1) is True
+
+
+async def test_backup_speedtest_refused_write_restores_nothing(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """When the console refuses to switch the uplink off, nothing is switched back."""
+    console.write_error = NetworkPermissionError("403")
+    await _press(hass, BACKUP_BUTTON)
+    task = setup_admin_entry.runtime_data.coordinator.backup_speedtest
+    if task is not None:
+        await task
+    await hass.async_block_till_done()
+    assert console.writes == []
+    assert _in_progress(hass) is False
+    # And the button can be pressed again
+    console.write_error = None
+    await _press(hass, BACKUP_BUTTON)
+    assert console.writes == [("net-wan", "disabled")]
+
+
+async def test_backup_speedtest_write_of_unknown_outcome_switches_back(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """When the switch-off may have reached the console, the uplink is switched on again."""
+    console.write_unknown = NetworkWriteUnknownError("timeout")
+    await _press(hass, BACKUP_BUTTON)
+    await _settle(hass)
+    assert console.writes == [("net-wan", "disabled"), ("net-wan", "dhcp")]
+    assert console.speedtests == []
+
+
+async def test_unload_during_backup_speedtest_switches_back_first(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A reload while the backup is measured ends it over the still open admin session."""
+    await _press(hass, BACKUP_BUTTON)
+    await _settle(hass)
+    assert console.writes == [("net-wan", "disabled")]
+    detached_before = console.detached
+    written_at: list[int] = []
+    original = console.set_wan_type
+
+    async def note(network_id: str, wan_type: str) -> str:
+        written_at.append(console.detached)
+        return await original(network_id, wan_type)
+
+    console.set_wan_type = note  # type: ignore[method-assign]
+    await hass.config_entries.async_unload(setup_admin_entry.entry_id)
+    await hass.async_block_till_done()
+    assert console.writes[-1] == ("net-wan", "dhcp")
+    # Switched back before any session was given back
+    assert written_at == [detached_before]
+
+
+async def test_only_administrators_press(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    hass_owner_user: MockUser,
+) -> None:
+    """The buttons write with the admin credentials: users without admin rights may not press."""
+    # A user of the group "Users" (the owner exists, so this one is none)
+    user = await hass.auth.async_create_user("Visitor", group_ids=["system-users"])
+    assert not user.is_admin
+    for button in (BUTTON, BACKUP_BUTTON):
+        with pytest.raises(Unauthorized):
+            await hass.services.async_call(
+                BUTTON_DOMAIN,
+                SERVICE_PRESS,
+                {ATTR_ENTITY_ID: button},
+                blocking=True,
+                context=Context(user_id=user.id),
+            )
+    assert console.speedtests == []
+    assert console.writes == []

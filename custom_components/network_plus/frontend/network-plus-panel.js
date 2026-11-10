@@ -1,8 +1,8 @@
 // Network Plus panel: the page in the sidebar where administrators see the
 // uplinks of their consoles now, the switches between them, the speed tests,
 // the backup drills and the remote sessions. Everything comes from the
-// integration over the WebSocket API; the page looks like Home Assistant's own.
-const VERSION = "0.8.0";
+// integration over the WebSocket API; the page is built from Home Assistant's
+// own elements (ha-card, ha-alert, ha-icon-button) and its theme.
 const PANEL_PATH = "/network-plus";
 // The page asks again this often while it is open (ms)
 const REFRESH = 30000;
@@ -94,6 +94,8 @@ if (!customElements.get("network-plus-panel")) {
       this._data = null;
       this._error = null;
       this._frameKey = null;
+      // Counts the requests: only the answer to the latest one counts
+      this._request = 0;
       this._bindOnce();
     }
 
@@ -144,25 +146,31 @@ if (!customElements.get("network-plus-panel")) {
       return !!this._narrow || this._hass?.dockedSidebar === "always_hidden";
     }
 
+    // An answer that arrives after a newer request was sent (another console
+    // chosen meanwhile) is dropped, so it cannot bring back the old console
     async _load() {
-      if (!this._hass || this._loading || document.visibilityState === "hidden") return;
-      this._loading = true;
+      if (!this._hass || document.visibilityState === "hidden") return;
+      const request = ++this._request;
+      const msg = { type: "network_plus/overview" };
+      if (this._entryId) msg.entry_id = this._entryId;
+      let data;
       try {
-        const msg = { type: "network_plus/overview" };
-        if (this._entryId) msg.entry_id = this._entryId;
-        this._data = await this._hass.callWS(msg);
-        this._error = null;
-        this._entryId = this._data.console?.entry_id || this._entryId;
+        data = await this._hass.callWS(msg);
       } catch (err) {
+        if (request !== this._request) return;
         // A console removed meanwhile: show the first one again
         if (err?.code === "not_found" && this._entryId) {
           this._entryId = null;
-          this._loading = false;
           return this._load();
         }
         this._error = err?.message || String(err);
+        this._render();
+        return;
       }
-      this._loading = false;
+      if (request !== this._request) return;
+      this._data = data;
+      this._error = null;
+      this._entryId = data.console?.entry_id || this._entryId;
       this._render();
     }
 
@@ -205,6 +213,10 @@ if (!customElements.get("network-plus-panel")) {
         this._sheetHtml = html;
         sheet.innerHTML = html;
       }
+      // At the bottom, as on Home Assistant's own pages: the integration and its version
+      const about = this.shadowRoot.getElementById("about");
+      const version = this._data?.version;
+      if (about) about.textContent = version ? `Network Plus ${version}` : "";
     }
 
     // The parts that stay while the page is open: toolbar, tabs, console choice
@@ -214,7 +226,7 @@ if (!customElements.get("network-plus-panel")) {
         `<a class="tab${this._tab === id ? " active" : ""}" data-tab="${id}" href="${PANEL_PATH}/${id}">` +
         `${this._narrow ? icon(ic) : ""}<span>${esc(t[label])}</span></a>`).join("");
       const menu = this._showMenu
-        ? `<button class="icon-button menu-button" data-act="menu" title="${esc(t.menu)}">${icon("menu")}</button>`
+        ? `<ha-icon-button class="menu-button" data-act="menu" label="${esc(t.menu)}" path="${MDI.menu}"></ha-icon-button>`
         : "";
       const choice = consoles.length > 1
         ? `<select id="console" aria-label="${esc(t.console)}">${consoles.map((c) =>
@@ -225,8 +237,8 @@ if (!customElements.get("network-plus-panel")) {
         <div class="app${this._narrow ? " narrow" : ""}">
           <div class="toolbar">${menu}<div class="main-title">Network Plus</div>
             ${this._narrow ? "" : `<nav class="tabs">${tabs}</nav>`}
-            <div class="tools">${choice}<button class="icon-button" data-act="refresh" title="${esc(t.refresh)}">${icon("refresh")}</button></div></div>
-          <div class="content"><div class="sheet" id="sheet"></div></div>
+            <div class="tools">${choice}<ha-icon-button data-act="refresh" label="${esc(t.refresh)}" path="${MDI.refresh}"></ha-icon-button></div></div>
+          <div class="content"><div class="sheet" id="sheet"></div><div class="about" id="about"></div></div>
           ${this._narrow ? `<nav class="bottom-tabs">${tabs}</nav>` : ""}
         </div>`;
       this._sheetHtml = null;
@@ -234,13 +246,13 @@ if (!customElements.get("network-plus-panel")) {
 
     _content() {
       const t = this._t;
-      if (this._error) return `<div class="alert err">${esc(t.failed)}: ${esc(this._error)}</div>`;
+      if (this._error) return this._alert(`${t.failed}: ${this._error}`, "error");
       if (!this._data) return `<div class="muted">${esc(t.loading)}</div>`;
-      if (!this._data.consoles.length) return `<div class="alert">${esc(t.noConsole)}</div>`;
+      if (!this._data.consoles.length) return this._alert(t.noConsole);
       const c = this._data.console;
       if (!c) {
         const known = this._data.consoles.find((x) => x.entry_id === this._entryId);
-        return known && !known.loaded ? `<div class="alert">${esc(t.notLoaded)}</div>` : `<div class="muted">${esc(t.loading)}</div>`;
+        return known && !known.loaded ? this._alert(t.notLoaded, "warning") : `<div class="muted">${esc(t.loading)}</div>`;
       }
       switch (this._tab) {
         case "events": return this._events(c);
@@ -291,8 +303,14 @@ if (!customElements.get("network-plus-panel")) {
       return c.uplinks.find((u) => u.key === key)?.name || key || "–";
     }
 
+    // Home Assistant's card; the header as a slotted .card-header takes its style
+    // and can hold chips next to the title
     _card(title, body, extra = "") {
-      return `<div class="card${extra}">${title ? `<h2>${title}</h2>` : ""}<div class="card-content">${body}</div></div>`;
+      return `<ha-card class="${extra.trim()}">${title ? `<h1 class="card-header">${title}</h1>` : ""}<div class="card-content">${body}</div></ha-card>`;
+    }
+
+    _alert(text, type = "info") {
+      return `<ha-alert alert-type="${type}">${esc(text)}</ha-alert>`;
     }
 
     _kv(rows) {
@@ -428,7 +446,7 @@ if (!customElements.get("network-plus-panel")) {
     _speedtests(c) {
       const t = this._t;
       const tests = c.history.speedtests;
-      const running = c.speedtest_running ? `<div class="alert">${esc(t.running)}</div>` : "";
+      const running = c.speedtest_running ? this._alert(t.running) : "";
       const foot = `<div class="muted small">${esc(fill(t.kept, { n: c.history.days }))}</div>`;
       if (!tests.length) return running + this._card("", `<div class="muted">${esc(t.noSpeedtests)}</div>${foot}`);
       const keys = [...new Set(tests.map((s) => s.uplink || ""))];
@@ -477,7 +495,7 @@ if (!customElements.get("network-plus-panel")) {
     _drills(c) {
       const t = this._t;
       const drills = c.history.drills;
-      const hint = c.admin ? "" : `<div class="alert">${esc(t.noAdmin)}</div>`;
+      const hint = c.admin ? "" : this._alert(t.noAdmin);
       if (!drills.length) return hint + this._card("", `<div class="muted">${esc(t.noDrills)}</div>`);
       const avg = (key) => {
         const v = drills.map((d) => d[key]).filter(Number.isFinite);
@@ -529,7 +547,7 @@ if (!customElements.get("network-plus-panel")) {
     .toolbar { display: flex; align-items: center; flex: none; height: var(--header-height, 56px); padding: 0 12px;
       background: var(--sidebar-background-color); color: var(--sidebar-text-color, var(--primary-text-color));
       border-bottom: 1px solid var(--divider-color); }
-    .menu-button { color: var(--sidebar-icon-color, var(--secondary-text-color)); margin-right: 12px; }
+    .menu-button { color: var(--sidebar-icon-color, var(--secondary-text-color)); margin-right: 4px; }
     .main-title { font-size: 20px; font-weight: 400; line-height: 32px; margin-left: 12px; white-space: nowrap; }
     .menu-button + .main-title { margin-left: 0; }
     .tabs { display: flex; height: 100%; margin-left: 24px; overflow-x: auto; scrollbar-width: none; }
@@ -548,22 +566,18 @@ if (!customElements.get("network-plus-panel")) {
     .bottom-tabs .tab .mdi { padding: 2px 12px; border-radius: 14px; box-sizing: content-box; }
     .bottom-tabs .tab.active .mdi { background: color-mix(in srgb, var(--primary-color) 15%, transparent); }
     .content { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+    .about { text-align: center; color: var(--secondary-text-color); font-size: var(--ha-font-size-s, 12px);
+      padding: 8px 0 24px; }
     .sheet { max-width: 1040px; margin: 0 auto; padding: 16px; }
     .narrow .sheet { padding: 8px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 0 16px; }
     .narrow .grid { grid-template-columns: 1fr; }
-    .card { background: var(--card-background-color); color: var(--primary-text-color);
-      border-radius: var(--ha-card-border-radius, 12px); border: var(--ha-card-border-width, 1px) solid var(--ha-card-border-color, var(--divider-color));
-      box-shadow: var(--ha-card-box-shadow, none); margin-bottom: 16px; overflow: hidden; }
-    .narrow .card { margin-bottom: 8px; }
-    .card h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0; padding: 16px 16px 8px; font-size: 20px; font-weight: 400; line-height: 28px; }
-    .card-content { padding: 0 16px 16px; }
-    .card:not(:has(h2)) .card-content { padding-top: 16px; }
-    .card.list .card-content { padding: 0 0 8px; }
-    .head-note { font-size: 14px; }
-    .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; padding: 0; border: 0;
-      border-radius: 50%; background: none; color: inherit; cursor: pointer; }
-    .icon-button:hover { background: color-mix(in srgb, var(--primary-text-color) 8%, transparent); }
+    ha-card { display: block; margin-bottom: 16px; overflow: hidden; }
+    .narrow ha-card { margin-bottom: 8px; }
+    ha-card .card-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    ha-card.list .card-content { padding: 0 0 8px; }
+    ha-alert { display: block; margin-bottom: 16px; }
+    .head-note { font-size: var(--ha-font-size-m, 14px); }
     .mdi { width: 24px; height: 24px; fill: currentColor; display: block; }
     .chips { display: inline-flex; gap: 4px; flex-wrap: wrap; }
     .chip { display: inline-block; padding: 0 8px; border-radius: 10px; font-size: 12px; line-height: 20px; font-weight: 500;
@@ -586,9 +600,6 @@ if (!customElements.get("network-plus-panel")) {
     .muted { color: var(--secondary-text-color); }
     .small { font-size: 12px; line-height: 16px; margin-top: 8px; }
     .mono { font-family: var(--ha-font-family-code, monospace); font-size: 13px; word-break: break-all; }
-    .alert { display: block; padding: 12px 16px; margin-bottom: 16px; border-radius: 8px; line-height: 20px;
-      background: color-mix(in srgb, var(--info-color, #039be5) 12%, transparent); }
-    .alert.err { background: color-mix(in srgb, var(--error-color, #db4437) 14%, transparent); }
     table { border-collapse: collapse; width: 100%; }
     table.kv th { width: 40%; text-align: left; font-weight: 400; color: var(--secondary-text-color); padding: 8px 16px 8px 0; vertical-align: top; }
     table.kv td { padding: 8px 0; }
@@ -612,5 +623,4 @@ if (!customElements.get("network-plus-panel")) {
   `;
 
   customElements.define("network-plus-panel", NetworkPlusPanel);
-  console.info(`%c NETWORK-PLUS-PANEL %c ${VERSION} `, "color:#fff;background:#03a9f4;font-weight:700", "");
 }

@@ -6,8 +6,9 @@ from datetime import timedelta
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
+    MockUser,
     async_capture_events,
     async_fire_time_changed,
 )
@@ -24,14 +25,15 @@ from homeassistant.const import (
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError, Unauthorized
 from homeassistant.util import dt as dt_util
 
 from custom_components.network_plus.api import (
     NetworkAuthError,
     NetworkError,
     NetworkPermissionError,
+    NetworkWriteUnknownError,
 )
 from custom_components.network_plus.const import (
     CONF_AUTO_OFF_MINUTES,
@@ -429,3 +431,178 @@ async def test_drill_survives_a_restart(
     await hass.config_entries.async_reload(admin_entry.entry_id)
     await hass.async_block_till_done()
     assert admin_entry.runtime_data.coordinator.drill is None
+
+
+async def test_write_of_unknown_outcome_keeps_the_timer(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """The console took the write, but the check after it failed: the timer still switches back."""
+    console.write_unknown = NetworkWriteUnknownError("written, not read back (HTTP 502)")
+    with pytest.raises(HomeAssistantError, match="did not confirm the change"):
+        await _turn(hass, SERVICE_TURN_ON)
+    assert console.writes == [("net-wan", "disabled")]
+    assert CONF_ENFORCED_AT in setup_admin_entry.data
+    # The drill began before the write
+    assert setup_admin_entry.data[CONF_DRILL]["started_at"] is not None
+    console.write_unknown = None
+    await _poll(hass, setup_admin_entry)
+    assert hass.states.get(SWITCH).state == STATE_ON  # type: ignore[union-attr]
+    freezer.tick(timedelta(minutes=15, seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert console.writes[-1] == ("net-wan", "dhcp")
+    assert hass.states.get(SWITCH).state == STATE_OFF  # type: ignore[union-attr]
+    assert CONF_ENFORCED_AT not in setup_admin_entry.data
+
+
+async def test_refused_write_leaves_nothing_behind(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A write the console refused forgets the start, the timer and the new drill."""
+    console.write_error = NetworkPermissionError("403")
+    with pytest.raises(HomeAssistantError, match="may not change"):
+        await _turn(hass, SERVICE_TURN_ON)
+    assert CONF_ENFORCED_AT not in setup_admin_entry.data
+    assert CONF_ENFORCED_WAN_TYPE not in setup_admin_entry.data
+    assert CONF_DRILL not in setup_admin_entry.data
+    attrs = hass.states.get(SWITCH).attributes  # type: ignore[union-attr]
+    assert attrs["enforced_since"] is None and attrs["auto_off_at"] is None
+    console.write_error = None
+    freezer.tick(timedelta(minutes=16))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert console.writes == []
+
+
+async def test_auto_off_while_the_state_is_unknown(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """An unknown state at the end of the time does not keep the uplink off."""
+    await _turn(hass, SERVICE_TURN_ON)
+    del console.configs[0]["wan_type"]
+    await _poll(hass, setup_admin_entry)
+    assert hass.states.get(SWITCH).state == STATE_UNKNOWN  # type: ignore[union-attr]
+    freezer.tick(timedelta(minutes=15, seconds=1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert console.writes[-1] == ("net-wan", "dhcp")
+    assert CONF_ENFORCED_AT not in setup_admin_entry.data
+
+
+async def test_switched_on_in_the_console_forgets_the_start(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+) -> None:
+    """Someone switched the uplink on in the console: a later restart must not touch it."""
+    await _turn(hass, SERVICE_TURN_ON)
+    console.configs[0]["wan_type"] = "dhcp"
+    await _poll(hass, setup_admin_entry)
+    assert CONF_ENFORCED_AT not in setup_admin_entry.data
+    assert setup_admin_entry.data[CONF_DRILL]["ended_at"] is not None
+    # Later switched off on purpose in the console, then Home Assistant restarts
+    console.configs[0]["wan_type"] = "disabled"
+    writes = len(console.writes)
+    await hass.config_entries.async_reload(setup_admin_entry.entry_id)
+    await hass.async_block_till_done()
+    assert len(console.writes) == writes
+
+
+async def test_switch_off_without_a_start_writes_nothing_while_on(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """Turning the switch off while the uplink is on does not write a guessed type."""
+    await _turn(hass, SERVICE_TURN_OFF)
+    assert console.writes == []
+    # Unknown state and nothing remembered: nothing to restore
+    del console.configs[0]["wan_type"]
+    await _poll(hass, setup_admin_entry)
+    with pytest.raises(HomeAssistantError, match="not found"):
+        await _turn(hass, SERVICE_TURN_OFF)
+    assert console.writes == []
+
+
+async def test_guard_while_the_console_limit_is_off(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """The plan size set in the console still guards when its data limit is turned off."""
+    console.devices[2] = {**lte_device(rx=6_500_000_000, tx=0), "lte_data_limit_enabled": False}
+    await _poll(hass, setup_admin_entry)
+    with pytest.raises(ServiceValidationError, match="81 %"):
+        await _turn(hass, SERVICE_TURN_ON)
+    assert console.writes == []
+
+
+async def test_only_administrators_switch(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    hass_admin_user: MockUser,
+) -> None:
+    """A user without administrator rights may not switch; administrators and automations may."""
+    # A user of the group "Users": may control entities, is no administrator
+    user = await hass.auth.async_create_user("Visitor", group_ids=["system-users"])
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_ON,
+            {ATTR_ENTITY_ID: SWITCH},
+            blocking=True,
+            context=Context(user_id=user.id),
+        )
+    assert console.writes == []
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_ON,
+        {ATTR_ENTITY_ID: SWITCH},
+        blocking=True,
+        context=Context(user_id=hass_admin_user.id),
+    )
+    assert console.writes == [("net-wan", "disabled")]
+    await _turn(hass, SERVICE_TURN_OFF)  # no user: an automation
+    assert console.writes[-1] == ("net-wan", "dhcp")
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            SWITCH_DOMAIN,
+            SERVICE_TURN_OFF,
+            {ATTR_ENTITY_ID: SWITCH},
+            blocking=True,
+            context=Context(user_id="no-such-user"),
+        )
+
+
+async def test_refused_write_keeps_the_last_drill(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """The page keeps showing the last real drill after an attempt the console refused."""
+    await _turn(hass, SERVICE_TURN_ON)
+    await _turn(hass, SERVICE_TURN_OFF)
+    drill = setup_admin_entry.data[CONF_DRILL]
+    console.write_error = NetworkError("busy")
+    with pytest.raises(HomeAssistantError):
+        await _turn(hass, SERVICE_TURN_ON)
+    assert setup_admin_entry.data[CONF_DRILL] == drill
+    assert setup_admin_entry.runtime_data.coordinator.drill.as_dict() == drill  # type: ignore[union-attr]
+
+
+async def test_timer_without_anything_enforced(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A timer that finds nothing enforced and the uplink on does nothing."""
+    setup_admin_entry.runtime_data.coordinator.arm_auto_off(timedelta(seconds=1))
+    freezer.tick(timedelta(seconds=2))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert console.writes == []

@@ -28,6 +28,9 @@ class InternetEvent(NetworkPlusEntity, EventEntity):
 
     _attr_event_types = EVENT_TYPES
     _attr_translation_key = "internet"
+    # A changed public address reaches automations, not the recorder: its
+    # history, logbook and backups would keep the addresses of the household
+    _unrecorded_attributes = frozenset({"address", "previous"})
 
     def __init__(self, entry: NetworkConfigEntry) -> None:
         """Initialize the entity."""
