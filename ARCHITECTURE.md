@@ -219,7 +219,12 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - The page is plain JavaScript without a build step, one file, built from
   Home Assistant's own elements (`ha-card`, `ha-alert`, `ha-icon-button`),
   which the frontend has loaded already, with the toolbar and tabs of the
-  settings pages; colours come from the theme. Its URL carries a hash of
+  settings pages; colours come from the theme. The toolbar ends with the
+  header all of these integrations and apps share (STANDARD.md §7 of the
+  repository template): the time of the last answer, refresh (the same
+  WebSocket request again, no page reload) and settings (Home Assistant's
+  page of the integration, opened by in-app navigation). The console
+  choice is part of the page, so it sits above the cards. Its URL carries a hash of
   the file, so a browser fetches every changed page. It holds no version of
   its own.
 

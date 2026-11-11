@@ -106,7 +106,7 @@ If the console has an LTE backup device, it gets a device of its own below the g
 
 ### The page
 
-**Network Plus** in the sidebar, for administrators. It shows one console at a time (a choice in the toolbar when there are several) and reads it again every 30 seconds while it is open:
+**Network Plus** in the sidebar, for administrators. It shows one console at a time (a choice above the cards when there are several) and reads it again every 30 seconds while it is open. The header ends like on every page of these integrations and apps: the time the page last got its data ("As of 14:02:37", hidden on a phone), **Refresh** (reads the data again at once) and **Settings** (Home Assistant's page of the integration):
 
 - **Uplinks**: the active uplink, latency, last switch, last speed test and last drill; per uplink its state, the gateway's latency and availability, the negotiated link speed against the expected one, port, connection type and public addresses; the LTE backup with data used against the plan and the signal.
 - **History**: failovers and returns with how long the backup carried the traffic, brief failovers, uplinks going down and up with how long they were gone, new public addresses (the uplink and the family, not the address).
@@ -523,7 +523,7 @@ scripts/check.sh
 
 `scripts/check.sh` runs what CI runs: ruff, the changelog and translation checks, mypy, the tests with their coverage threshold, the page checks and hassfest in Docker.
 
-The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own certificates) and a throwaway Home Assistant, reachable from this machine only, add the consoles through the config flow (one pinned, one with the check off), and drive the page in a headless browser (all tabs, the console choice, version line, phone width, dark mode, no page and no admin writes for non-administrators), then stop Home Assistant again. They need their own environment:
+The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own certificates) and a throwaway Home Assistant, reachable from this machine only, add the consoles through the config flow (one pinned, one with the check off), and drive the page in a headless browser (all tabs, the header with stamp, refresh and settings, the console choice, version line, phone width, dark mode, no page and no admin writes for non-administrators), then stop Home Assistant again. They need their own environment:
 
 ```bash
 uv venv --python 3.14 .venv-panel && uv pip install --python .venv-panel/bin/python -r requirements_panel.txt

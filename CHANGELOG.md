@@ -4,6 +4,17 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-11
+
+### Added
+
+- **The same header as on every page of these integrations and apps**: the toolbar of the page ends with the time the page last got its data ("As of 14:02:37", hidden on a phone), *Refresh* and *Settings*. Refresh reads the data again over the WebSocket without reloading the page, spins while it loads and moves the time; Settings opens Home Assistant's page of the integration (Settings → Devices & services → Network Plus) inside the app. Both on every tab.
+
+### Changed
+
+- The choice of the console (with more than one) moved from the toolbar to the top of the page, above the cards.
+- The page check (CI job Page) tests the header on every tab: the order stamp, refresh, settings; that refresh sends the request again, shows the changed data and a new time; that settings opens the integration's page without reloading; the stamp hidden on a phone.
+
 ## [0.9.1] - 2026-11-11
 
 ### Fixed

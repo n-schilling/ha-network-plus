@@ -4,6 +4,8 @@
 // integration over the WebSocket API; the page is built from Home Assistant's
 // own elements (ha-card, ha-alert, ha-icon-button) and its theme.
 const PANEL_PATH = "/network-plus";
+// Home Assistant's own page of the integration, behind the settings button
+const SETTINGS_PATH = "/config/integrations/integration/network_plus";
 // The page asks again this often while it is open (ms)
 const REFRESH = 30000;
 
@@ -15,6 +17,8 @@ if (!customElements.get("network-plus-panel")) {
     speedtests: "M12,16A3,3 0 0,1 9,13C9,11.88 9.61,10.9 10.5,10.39L20.21,4.77L14.68,14.35C14.18,15.33 13.17,16 12,16M12,3C13.81,3 15.5,3.5 16.97,4.32L14.87,5.53C14,5.19 13,5 12,5A8,8 0 0,0 4,13C4,15.21 4.89,17.21 6.34,18.65H6.35C6.74,19.04 6.74,19.67 6.35,20.06C5.96,20.45 5.32,20.45 4.93,20.07V20.07C3.12,18.26 2,15.76 2,13A10,10 0 0,1 12,3M22,13C22,15.76 20.88,18.26 19.07,20.07V20.07C18.68,20.45 18.05,20.45 17.66,20.06C17.27,19.67 17.27,19.04 17.66,18.65V18.65C19.11,17.2 20,15.21 20,13C20,12 19.81,11 19.46,10.1L20.67,8C21.5,9.5 22,11.18 22,13Z",
     drills: "M21,9L17,5V8H10V10H17V13M7,11L3,15L7,19V16H14V14H7V11Z",
     remote: "M9,5H15L12,8L9,5M10.5,14.66C10.2,15 10,15.5 10,16A2,2 0 0,0 12,18A2,2 0 0,0 14,16C14,15.45 13.78,14.95 13.41,14.59L14.83,13.17C15.55,13.9 16,14.9 16,16A4,4 0 0,1 12,20A4,4 0 0,1 8,16C8,14.93 8.42,13.96 9.1,13.25L9.09,13.24L16.17,6.17V6.17C16.89,5.45 17.89,5 19,5A4,4 0 0,1 23,9A4,4 0 0,1 19,13C17.9,13 16.9,12.55 16.17,11.83L17.59,10.41C17.95,10.78 18.45,11 19,11A2,2 0 0,0 21,9A2,2 0 0,0 19,7C18.45,7 17.95,7.22 17.59,7.59L10.5,14.66M6.41,7.59C6.05,7.22 5.55,7 5,7A2,2 0 0,0 3,9A2,2 0 0,0 5,11C5.55,11 6.05,10.78 6.41,10.41L7.83,11.83C7.1,12.55 6.1,13 5,13A4,4 0 0,1 1,9A4,4 0 0,1 5,5C6.11,5 7.11,5.45 7.83,6.17V6.17L10.59,8.93L9.17,10.35L6.41,7.59Z",
+    // mdi:cog-outline
+    settings: "M12,8A4,4 0 0,1 16,12A4,4 0 0,1 12,16A4,4 0 0,1 8,12A4,4 0 0,1 12,8M12,10A2,2 0 0,0 10,12A2,2 0 0,0 12,14A2,2 0 0,0 14,12A2,2 0 0,0 12,10M10,22C9.75,22 9.54,21.82 9.5,21.58L9.13,18.93C8.5,18.68 7.96,18.34 7.44,17.94L4.95,18.95C4.73,19.03 4.46,18.95 4.34,18.73L2.34,15.27C2.21,15.05 2.27,14.78 2.46,14.63L4.57,12.97L4.5,12L4.57,11L2.46,9.37C2.27,9.22 2.21,8.95 2.34,8.73L4.34,5.27C4.46,5.05 4.73,4.96 4.95,5.05L7.44,6.05C7.96,5.66 8.5,5.32 9.13,5.07L9.5,2.42C9.54,2.18 9.75,2 10,2H14C14.25,2 14.46,2.18 14.5,2.42L14.87,5.07C15.5,5.32 16.04,5.66 16.56,6.05L19.05,5.05C19.27,4.96 19.54,5.05 19.66,5.27L21.66,8.73C21.79,8.95 21.73,9.22 21.54,9.37L19.43,11L19.5,12L19.43,13L21.54,14.63C21.73,14.78 21.79,15.05 21.66,15.27L19.66,18.73C19.54,18.95 19.27,19.04 19.05,18.95L16.56,17.95C16.04,18.34 15.5,18.68 14.87,18.93L14.5,21.58C14.46,21.82 14.25,22 14,22H10M11.25,4L10.88,6.61C9.68,6.86 8.62,7.5 7.85,8.39L5.44,7.35L4.69,8.65L6.8,10.2C6.4,11.37 6.4,12.64 6.8,13.8L4.68,15.36L5.43,16.66L7.86,15.62C8.63,16.5 9.68,17.14 10.87,17.38L11.24,20H12.76L13.13,17.39C14.32,17.14 15.37,16.5 16.14,15.62L18.57,16.66L19.32,15.36L17.2,13.81C17.6,12.64 17.6,11.37 17.2,10.2L19.31,8.65L18.56,7.35L16.15,8.39C15.38,7.5 14.32,6.86 13.12,6.62L12.75,4H11.25Z",
     refresh: "M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z",
   };
 
@@ -30,7 +34,7 @@ if (!customElements.get("network-plus-panel")) {
   const TEXTS = {
     en: {
       tabUplinks: "Uplinks", tabEvents: "History", tabSpeedtests: "Speed tests", tabDrills: "Drills",
-      tabRemote: "Remote", menu: "Menu", refresh: "Refresh", console: "Console",
+      tabRemote: "Remote", menu: "Menu", refresh: "Refresh", settings: "Settings", asOf: "As of {t}", console: "Console",
       loading: "Loading …", noConsole: "No console is set up. Add one under Settings → Devices & services.",
       notLoaded: "This console is not loaded at the moment. Home Assistant tries again by itself.",
       failed: "The data could not be read", now: "Now", active: "active", preferred: "preferred", backup: "backup",
@@ -53,7 +57,7 @@ if (!customElements.get("network-plus-panel")) {
     },
     de: {
       tabUplinks: "Leitungen", tabEvents: "Verlauf", tabSpeedtests: "Speedtests", tabDrills: "Übungen",
-      tabRemote: "Fernzugriff", menu: "Menü", refresh: "Aktualisieren", console: "Konsole",
+      tabRemote: "Fernzugriff", menu: "Menü", refresh: "Aktualisieren", settings: "Einstellungen", asOf: "Stand {t}", console: "Konsole",
       loading: "Lädt …", noConsole: "Keine Konsole eingerichtet. Unter Einstellungen → Geräte & Dienste hinzufügen.",
       notLoaded: "Diese Konsole ist gerade nicht geladen. Home Assistant versucht es selbst erneut.",
       failed: "Die Daten ließen sich nicht lesen", now: "Jetzt", active: "aktiv", preferred: "bevorzugt", backup: "Backup",
@@ -96,6 +100,9 @@ if (!customElements.get("network-plus-panel")) {
       this._frameKey = null;
       // Counts the requests: only the answer to the latest one counts
       this._request = 0;
+      // Requests on their way (the refresh button spins) and when the data last came
+      this._pending = 0;
+      this._loadedAt = null;
       this._bindOnce();
     }
 
@@ -154,6 +161,8 @@ if (!customElements.get("network-plus-panel")) {
       const msg = { type: "network_plus/overview" };
       if (this._entryId) msg.entry_id = this._entryId;
       let data;
+      this._pending += 1;
+      this._busy();
       try {
         data = await this._hass.callWS(msg);
       } catch (err) {
@@ -166,10 +175,14 @@ if (!customElements.get("network-plus-panel")) {
         this._error = err?.message || String(err);
         this._render();
         return;
+      } finally {
+        this._pending -= 1;
+        this._busy();
       }
       if (request !== this._request) return;
       this._data = data;
       this._error = null;
+      this._loadedAt = Date.now();
       this._entryId = data.console?.entry_id || this._entryId;
       this._render();
     }
@@ -188,6 +201,11 @@ if (!customElements.get("network-plus-panel")) {
         const act = e.target.closest?.("[data-act]")?.dataset.act;
         if (act === "menu") this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true }));
         if (act === "refresh") this._load();
+        // In-app navigation like Home Assistant's own links, no page reload
+        if (act === "settings") {
+          window.history.pushState(null, "", SETTINGS_PATH);
+          window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
+        }
       });
       root.addEventListener("change", (e) => {
         if (e.target.id !== "console") return;
@@ -217,9 +235,24 @@ if (!customElements.get("network-plus-panel")) {
       const about = this.shadowRoot.getElementById("about");
       const version = this._data?.version;
       if (about) about.textContent = version ? `Network Plus ${version}` : "";
+      // When the page last got its data
+      const stamp = this.shadowRoot.getElementById("stamp");
+      if (stamp) {
+        stamp.textContent = this._loadedAt
+          ? fill(this._t.asOf, { t: new Date(this._loadedAt).toLocaleTimeString(this._lang, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }) })
+          : "";
+      }
+      this._busy();
     }
 
-    // The parts that stay while the page is open: toolbar, tabs, console choice
+    // The refresh button spins while a request is on its way
+    _busy() {
+      this.shadowRoot.getElementById("refresh")?.classList.toggle("spin", this._pending > 0);
+    }
+
+    // The parts that stay while the page is open: toolbar, tabs, console choice.
+    // The header ends like on every page of Nico's integrations and apps: the
+    // time of the data, refresh, and Home Assistant's page of the integration
     _frame(consoles) {
       const t = this._t;
       const tabs = TABS.map(([id, ic, label]) =>
@@ -237,8 +270,10 @@ if (!customElements.get("network-plus-panel")) {
         <div class="app${this._narrow ? " narrow" : ""}">
           <div class="toolbar">${menu}<div class="main-title">Network Plus</div>
             ${this._narrow ? "" : `<nav class="tabs">${tabs}</nav>`}
-            <div class="tools">${choice}<ha-icon-button data-act="refresh" label="${esc(t.refresh)}" path="${MDI.refresh}"></ha-icon-button></div></div>
-          <div class="content"><div class="sheet" id="sheet"></div><div class="about" id="about"></div></div>
+            <div class="tools"><span class="stamp" id="stamp"></span>
+              <ha-icon-button id="refresh" data-act="refresh" label="${esc(t.refresh)}" path="${MDI.refresh}"></ha-icon-button>
+              <ha-icon-button id="settings" data-act="settings" label="${esc(t.settings)}" path="${MDI.settings}"></ha-icon-button></div></div>
+          <div class="content">${choice ? `<div class="choice">${choice}</div>` : ""}<div class="sheet" id="sheet"></div><div class="about" id="about"></div></div>
           ${this._narrow ? `<nav class="bottom-tabs">${tabs}</nav>` : ""}
         </div>`;
       this._sheetHtml = null;
@@ -557,7 +592,18 @@ if (!customElements.get("network-plus-panel")) {
     .tab.active { color: var(--primary-color); opacity: 1; }
     .tabs .tab.active::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--primary-color); }
     .tools { display: flex; align-items: center; gap: 4px; margin-left: auto; padding-left: 8px; }
-    .tools select { height: 36px; max-width: 40vw; padding: 0 8px; border-radius: 8px; border: 1px solid var(--divider-color);
+    .stamp { color: var(--secondary-text-color); font-size: var(--ha-font-size-s, 12px); white-space: nowrap; font-variant-numeric: tabular-nums; }
+    .narrow .stamp { display: none; }
+    @media (max-width: 600px) { .stamp { display: none; } }
+    .tools ha-icon-button { color: var(--sidebar-icon-color, var(--secondary-text-color)); }
+    .tools ha-icon-button.spin { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* The console choice belongs to the page, so it sits above the cards, not in the header */
+    .choice { max-width: 1040px; margin: 0 auto; padding: 16px 16px 0; }
+    .narrow .choice { padding: 8px 8px 0; }
+    .choice + .sheet { padding-top: 12px; }
+    .narrow .choice + .sheet { padding-top: 8px; }
+    .choice select { height: 40px; max-width: 100%; padding: 0 8px; border-radius: 8px; border: 1px solid var(--divider-color);
       background: var(--card-background-color); color: var(--primary-text-color); font: inherit; }
     .bottom-tabs { display: flex; flex: none; justify-content: space-around; background: var(--sidebar-background-color);
       border-top: 1px solid var(--divider-color); padding-bottom: env(safe-area-inset-bottom); }

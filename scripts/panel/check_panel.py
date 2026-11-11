@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 import json
 from pathlib import Path
 import random
+import re
 import shutil
 import socket
 import subprocess
@@ -571,8 +572,56 @@ async def _text(page: Page) -> str:
     return await page.locator(f"{PANEL} #sheet").inner_text()
 
 
+STAMP = re.compile(r"As of \d{2}:\d{2}:\d{2}")
+# mdi:refresh and mdi:cog-outline, as Home Assistant and the other pages draw them
+REFRESH_ICON = "M17.65,6.35"
+SETTINGS_ICON = "M12,8A4,4 0 0,1 16,12"
+SETTINGS_PATH = "/config/integrations/integration/network_plus"
+
+
+async def _stamp(page: Page) -> str:
+    return (await page.locator(f"{PANEL} #stamp").inner_text()).strip()
+
+
+async def _header(page: Page, where: str) -> None:
+    """The end of the header: stamp, refresh, settings, in this order and nothing else."""
+    parts = await page.locator(f"{PANEL} .toolbar .tools").evaluate(
+        """el => [...el.children].map((c) => ({
+            tag: c.localName, id: c.id, label: c.getAttribute("label"),
+            path: c.getAttribute("path") || "", text: c.textContent.trim()}))"""
+    )
+    shape = [(part["tag"], part["id"]) for part in parts]
+    expect(
+        shape == [("span", "stamp"), ("ha-icon-button", "refresh"), ("ha-icon-button", "settings")],
+        f"{where}: header ends with {shape}",
+    )
+    expect(bool(STAMP.fullmatch(parts[0]["text"])), f"{where}: stamp {parts[0]['text']!r}")
+    expect(
+        parts[1]["label"] == "Refresh" and parts[1]["path"].startswith(REFRESH_ICON),
+        f"{where}: refresh button {parts[1]}",
+    )
+    expect(
+        parts[2]["label"] == "Settings" and parts[2]["path"].startswith(SETTINGS_ICON),
+        f"{where}: settings button {parts[2]}",
+    )
+
+
 async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path | None) -> Checks:
     page = await _open(browser, instance, ADMIN)
+    # The overview requests the page sends over the WebSocket
+    overviews: list[float] = []
+
+    def watch(ws: Any) -> None:
+        ws.on(
+            "framesent",
+            lambda frame: (
+                overviews.append(time.monotonic())
+                if '"network_plus/overview"' in str(frame)
+                else None
+            ),
+        )
+
+    page.on("websocket", watch)
 
     async def from_start() -> None:
         """Every check starts on the first tab, whatever the one before left behind."""
@@ -662,6 +711,101 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
 
     await checks.run("choosing another console shows it and keeps it", console_choice)
 
+    async def header() -> None:
+        for tab in ("uplinks", "events", "speedtests", "drills", "remote"):
+            if tab != "uplinks":
+                await _tab(page, tab)
+            await _header(page, tab)
+            expect(
+                await page.locator(f"{PANEL} .toolbar select").count() == 0,
+                f"{tab}: the console choice in the header",
+            )
+            expect(await page.locator(f"{PANEL} #stamp").is_visible(), f"{tab}: stamp hidden")
+
+    await checks.run("header on every tab: stamp, refresh and settings in this order", header)
+
+    async def switch_state(entity_id: str, wanted: str) -> None:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            reply = await api.ws(instance.token, {"type": "get_states"})
+            state = next(s for s in reply["result"] if s["entity_id"] == entity_id)
+            if state["state"] == wanted:
+                return
+            await asyncio.sleep(0.3)
+        raise AssertionError(f"{entity_id} did not become {wanted}")
+
+    async def enforced(wanted: str) -> None:
+        row = page.locator(f"{PANEL} table.kv tr", has_text="Backup uplink enforced")
+        await row.locator("td", has_text=re.compile(f"^{wanted}$")).wait_for(timeout=10000)
+
+    async def refresh() -> None:
+        await enforced("no")
+        states = await api.ws(instance.token, {"type": "get_states"})
+        switch = next(
+            s["entity_id"]
+            for s in states["result"]
+            if s["entity_id"].startswith("switch.gateway") and "enforce" in s["entity_id"]
+        )
+        try:
+            for wanted, shown in (("on", "yes"), ("off", "no")):
+                before = await _stamp(page)
+                # The stamp counts seconds: let one pass so a new one differs
+                await page.wait_for_timeout(1100)
+                service = "turn_on" if wanted == "on" else "turn_off"
+                await api.post(
+                    instance.token, f"/api/services/switch/{service}", {"entity_id": switch}
+                )
+                await switch_state(switch, wanted)
+                sent = len(overviews)
+                clicked = time.monotonic()
+                # The click and the class in one go: the button spins while the answer is on its way
+                spinning = await page.locator(f"{PANEL} #refresh").evaluate(
+                    "el => { el.click(); return el.classList.contains('spin'); }"
+                )
+                expect(spinning, "the refresh button does not spin while loading")
+                await enforced(shown)
+                expect(
+                    any(at >= clicked for at in overviews[sent:]),
+                    "refresh sent no request over the WebSocket",
+                )
+                await page.locator(f"{PANEL} #refresh:not(.spin)").wait_for()
+                after = await _stamp(page)
+                expect(
+                    after != before and STAMP.fullmatch(after) is not None,
+                    f"stamp {before!r} → {after!r}",
+                )
+        finally:
+            # Whatever failed, the next checks start with the uplink on
+            if instance.consoles[0].wan_type != "dhcp":
+                await api.post(
+                    instance.token, "/api/services/switch/turn_off", {"entity_id": switch}
+                )
+        expect(instance.consoles[0].wan_type == "dhcp", "the uplink did not come back")
+
+    await checks.run(
+        "refresh fetches the data again over the WebSocket, spins and moves the stamp", refresh
+    )
+
+    async def settings() -> None:
+        await page.evaluate("window.__noReload = true")
+        await page.locator(f"{PANEL} #settings").click()
+        await page.wait_for_url(f"**{SETTINGS_PATH}")
+        expect(
+            await page.evaluate("window.__noReload === true"),
+            "the settings button reloaded the whole page",
+        )
+        await page.wait_for_function(
+            """() => {
+                const main = document.querySelector('home-assistant')?.shadowRoot
+                    ?.querySelector('home-assistant-main')?.shadowRoot;
+                return !!main && !main.querySelector('network-plus-panel')
+                    && !!main.querySelector('ha-panel-config');
+            }""",
+            timeout=30000,
+        )
+
+    await checks.run("settings opens Home Assistant's page of the integration in the app", settings)
+
     async def phone_and_dark() -> None:
         for scheme in ("light", "dark"):
             phone = await _open(
@@ -682,6 +826,12 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
             expect(
                 await phone.locator(f"{PANEL} nav.bottom-tabs a.tab").count() == 5,
                 "tabs at the bottom on a phone",
+            )
+            expect(
+                not await phone.locator(f"{PANEL} #stamp").is_visible()
+                and await phone.locator(f"{PANEL} #refresh").is_visible()
+                and await phone.locator(f"{PANEL} #settings").is_visible(),
+                "on a phone: stamp hidden, refresh and settings shown",
             )
             background = await phone.locator(PANEL).evaluate(
                 "el => getComputedStyle(el).backgroundColor"
