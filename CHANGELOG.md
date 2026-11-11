@@ -4,6 +4,8 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-11
+
 ### Fixed
 
 - Tests: the config flow tests that end with a reauth or reconfigure wait for the reload it starts in the background, so the websocket listener no longer starts during teardown now and then (flaky failure "Lingering task … network_plus websocket"). No change to the integration.
