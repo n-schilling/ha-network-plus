@@ -2,6 +2,12 @@
 
 All notable changes are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Tests: the config flow tests that end with a reauth or reconfigure wait for the reload it starts in the background, so the websocket listener no longer starts during teardown now and then (flaky failure "Lingering task … network_plus websocket"). No change to the integration.
+
 ## [0.9.0] - 2026-11-10
 
 ### Changed

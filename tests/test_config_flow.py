@@ -184,6 +184,8 @@ async def test_reconfigure(
     assert result["reason"] == "reconfigure_successful"
     assert setup_entry.data[CONF_HOST] == "192.0.2.2"
     assert setup_entry.data[CONF_USERNAME] == "other"
+    # The flow reloads the entry in the background; let it finish before teardown
+    await hass.async_block_till_done()
 
 
 async def test_reconfigure_wrong_gateway(
@@ -218,6 +220,8 @@ async def test_reauth(
     assert result["reason"] == "reauth_successful"
     assert setup_entry.data[CONF_PASSWORD] == "new"
     assert console.created_with[-1][2] == "new"
+    # The flow reloads the entry in the background; let it finish before teardown
+    await hass.async_block_till_done()
 
 
 async def test_reauth_for_a_changed_certificate(
@@ -238,6 +242,8 @@ async def test_reauth_for_a_changed_certificate(
     assert result["reason"] == "reauth_successful"
     assert config_entry.data[CONF_CERT_FINGERPRINT] == FINGERPRINT
     assert config_entry.data[CONF_PASSWORD] == ENTRY_DATA[CONF_PASSWORD]
+    # The flow reloads the entry in the background; let it finish before teardown
+    await hass.async_block_till_done()
 
 
 async def test_reauth_certificate_then_password(
@@ -263,6 +269,8 @@ async def test_reauth_certificate_then_password(
     assert result["reason"] == "reauth_successful"
     assert config_entry.data[CONF_PASSWORD] == "new"
     assert config_entry.data[CONF_CERT_FINGERPRINT] == FINGERPRINT
+    # The flow reloads the entry in the background; let it finish before teardown
+    await hass.async_block_till_done()
 
 
 async def test_reauth_when_the_certificate_cannot_be_read(
@@ -314,6 +322,8 @@ async def test_reconfigure_keeps_a_confirmed_certificate(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], ENTRY_DATA)
     assert result["reason"] == "reconfigure_successful"
     assert CONF_CERT_FINGERPRINT not in config_entry.data
+    # The flow reloads the entry in the background; let it finish before teardown
+    await hass.async_block_till_done()
 
 
 async def test_reconfigure_keeps_admin_while_the_backup_is_enforced(
@@ -335,6 +345,8 @@ async def test_reconfigure_keeps_admin_while_the_backup_is_enforced(
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "backup_enforced"}
     assert setup_admin_entry.data[CONF_USE_ADMIN] is True
+    # The flow reloads the entry in the background; let it finish before teardown
+    await hass.async_block_till_done()
 
 
 async def test_admin_opt_in(hass: HomeAssistant, console: FakeConsole) -> None:
