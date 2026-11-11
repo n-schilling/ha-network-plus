@@ -219,7 +219,17 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
 - The page is plain JavaScript without a build step, one file, built from
   Home Assistant's own elements (`ha-card`, `ha-alert`, `ha-icon-button`),
   which the frontend has loaded already, with the toolbar and tabs of the
-  settings pages; colours come from the theme. The toolbar ends with the
+  settings pages; colours come from the theme. The toolbar starts with the
+  integration's icon: `brand/icon.png` (and `icon@2x.png`) of the
+  integration itself, served by Home Assistant's brands API
+  (`/api/brands/integration/network_plus/icon.png`, `dark_icon.png` in a
+  dark theme, which falls back to the light one). An `<img>` sends no
+  login, so the page asks for the brands access token
+  (`brands/access_token`, the same request the frontend makes), puts it
+  into the URL and asks again after 20 minutes or when the image fails to
+  load (Home Assistant changes it every 30 minutes and accepts the last
+  two). The name follows, then the tabs in the same row; on a narrow
+  screen the tabs go to a bar at the bottom. The toolbar ends with the
   header all of these integrations and apps share (STANDARD.md §7 of the
   repository template): the time of the last answer, refresh (the same
   WebSocket request again, no page reload) and settings (Home Assistant's

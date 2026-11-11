@@ -106,7 +106,7 @@ If the console has an LTE backup device, it gets a device of its own below the g
 
 ### The page
 
-**Network Plus** in the sidebar, for administrators. It shows one console at a time (a choice above the cards when there are several) and reads it again every 30 seconds while it is open. The header ends like on every page of these integrations and apps: the time the page last got its data ("As of 14:02:37", hidden on a phone), **Refresh** (reads the data again at once) and **Settings** (Home Assistant's page of the integration):
+**Network Plus** in the sidebar, for administrators. It shows one console at a time (a choice above the cards when there are several) and reads it again every 30 seconds while it is open. The header is one row, like on every page of these integrations and apps: the integration's icon and name, the tabs right after the name, and at the end the time the page last got its data ("As of 14:02:37", hidden on a phone), **Refresh** (reads the data again at once) and **Settings** (Home Assistant's page of the integration):
 
 - **Uplinks**: the active uplink, latency, last switch, last speed test and last drill; per uplink its state, the gateway's latency and availability, the negotiated link speed against the expected one, port, connection type and public addresses; the LTE backup with data used against the plan and the signal.
 - **History**: failovers and returns with how long the backup carried the traffic, brief failovers, uplinks going down and up with how long they were gone, new public addresses (the uplink and the family, not the address).
@@ -116,7 +116,7 @@ If the console has an LTE backup device, it gets a device of its own below the g
 
 The history is kept by the integration in a store of its own (`.storage/network_plus.history.<entry>`), not in the recorder, for 365 days (option *Keep history*, 1 to 3650 days); backup drills stay. It starts with the installation: nothing from before is shown. Removing the console removes its history.
 
-At the bottom the page shows the version of the integration. The page is built from Home Assistant's own elements and follows its theme, dark mode and phone width; on a phone the tabs move to the bottom.
+At the bottom the page shows the version of the integration. The page is built from Home Assistant's own elements and follows its theme, dark mode and phone width. On a narrow screen (Home Assistant's own "narrow", below 870 px, phones and small tablets) the tabs move to a bar at the bottom with an icon each, as on Home Assistant's own settings pages; the header keeps the menu button, icon, name, Refresh and Settings, and the name is shortened before the buttons would be pushed out.
 
 ### Admin features (opt-in)
 
@@ -523,7 +523,7 @@ scripts/check.sh
 
 `scripts/check.sh` runs what CI runs: ruff, the changelog and translation checks, mypy, the tests with their coverage threshold, the page checks and hassfest in Docker.
 
-The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own certificates) and a throwaway Home Assistant, reachable from this machine only, add the consoles through the config flow (one pinned, one with the check off), and drive the page in a headless browser (all tabs, the header with stamp, refresh and settings, the console choice, version line, phone width, dark mode, no page and no admin writes for non-administrators), then stop Home Assistant again. They need their own environment:
+The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own certificates) and a throwaway Home Assistant, reachable from this machine only, add the consoles through the config flow (one pinned, one with the check off), and drive the page in a headless browser (all tabs, the header with icon, name, tabs in the same row, stamp, refresh and settings, the console choice, version line, phone width, dark mode, no page and no admin writes for non-administrators), then stop Home Assistant again. They need their own environment:
 
 ```bash
 uv venv --python 3.14 .venv-panel && uv pip install --python .venv-panel/bin/python -r requirements_panel.txt

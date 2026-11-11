@@ -4,6 +4,17 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-11
+
+### Added
+
+- **The integration's icon in the header**, left of the name, the same one as in the Marketplace and on Home Assistant's integration page (from the integration's own brand folder; the dark variant in a dark theme). The header is now the one every page of these integrations and apps follows: icon, name, tabs in the same row, then time, Refresh and Settings.
+
+### Changed
+
+- On a narrow screen the name in the header is shortened before it would push Refresh or Settings out; the tabs stay in the bar at the bottom.
+- The page check (CI job Page) tests the header on every tab: the icon loads, the tabs sit in the same row as the name on a wide screen, and on a phone the icon, name, Refresh and Settings fit in the header with the tabs at the bottom.
+
 ## [0.10.0] - 2026-11-11
 
 ### Added

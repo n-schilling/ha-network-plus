@@ -8,6 +8,11 @@ const PANEL_PATH = "/network-plus";
 const SETTINGS_PATH = "/config/integrations/integration/network_plus";
 // The page asks again this often while it is open (ms)
 const REFRESH = 30000;
+// The integration's icon, from its own brand folder, served by Home Assistant's
+// brands API. An <img> sends no login, so the URL carries the brands access
+// token; Home Assistant changes it every 30 minutes and accepts the last two.
+const BRAND_PATH = "/api/brands/integration/network_plus";
+const BRAND_TOKEN_AGE = 20 * 60000;
 
 if (!customElements.get("network-plus-panel")) {
   const MDI = {
@@ -111,6 +116,7 @@ if (!customElements.get("network-plus-panel")) {
       this._hass = hass;
       if (first) this._load();
       if (first || this._menuShown !== this._showMenu) this._render();
+      else this._paintBrand();
     }
 
     set narrow(narrow) {
@@ -207,6 +213,13 @@ if (!customElements.get("network-plus-panel")) {
           window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
         }
       });
+      // A token that ran out while the page stood open: fetch a new one, once per frame
+      root.addEventListener("error", (e) => {
+        if (e.target.id !== "brand" || e.target.dataset.retried) return;
+        e.target.dataset.retried = "1";
+        this._brandAt = 0;
+        this._paintBrand();
+      }, true);
       root.addEventListener("change", (e) => {
         if (e.target.id !== "console") return;
         this._entryId = e.target.value;
@@ -243,6 +256,29 @@ if (!customElements.get("network-plus-panel")) {
           : "";
       }
       this._busy();
+      this._paintBrand();
+    }
+
+    // The icon left of the name; the dark variant falls back to the light one
+    async _paintBrand() {
+      if (!this._hass) return;
+      if (!this._brandToken || Date.now() - this._brandAt > BRAND_TOKEN_AGE) {
+        if (!this._brandRequest) {
+          this._brandRequest = this._hass.callWS({ type: "brands/access_token" })
+            .then((r) => { this._brandToken = r.token; this._brandAt = Date.now(); })
+            .catch(() => {})
+            .finally(() => { this._brandRequest = null; });
+        }
+        await this._brandRequest;
+      }
+      const img = this.shadowRoot.getElementById("brand");
+      if (!img || !this._brandToken) return;
+      const name = `${BRAND_PATH}/${this._hass.themes?.darkMode ? "dark_" : ""}icon`;
+      const query = `?token=${encodeURIComponent(this._brandToken)}&placeholder=no`;
+      const src = `${name}.png${query}`;
+      if (img.getAttribute("src") === src) return;
+      img.srcset = `${name}@2x.png${query} 2x`;
+      img.src = src;
     }
 
     // The refresh button spins while a request is on its way
@@ -268,7 +304,7 @@ if (!customElements.get("network-plus-panel")) {
       this.shadowRoot.innerHTML = `
         <style>${STYLE}</style>
         <div class="app${this._narrow ? " narrow" : ""}">
-          <div class="toolbar">${menu}<div class="main-title">Network Plus</div>
+          <div class="toolbar">${menu}<img class="brand" id="brand" alt="" width="24" height="24"><div class="main-title">Network Plus</div>
             ${this._narrow ? "" : `<nav class="tabs">${tabs}</nav>`}
             <div class="tools"><span class="stamp" id="stamp"></span>
               <ha-icon-button id="refresh" data-act="refresh" label="${esc(t.refresh)}" path="${MDI.refresh}"></ha-icon-button>
@@ -583,9 +619,12 @@ if (!customElements.get("network-plus-panel")) {
       background: var(--sidebar-background-color); color: var(--sidebar-text-color, var(--primary-text-color));
       border-bottom: 1px solid var(--divider-color); }
     .menu-button { color: var(--sidebar-icon-color, var(--secondary-text-color)); margin-right: 4px; }
-    .main-title { font-size: 20px; font-weight: 400; line-height: 32px; margin-left: 12px; white-space: nowrap; }
-    .menu-button + .main-title { margin-left: 0; }
-    .tabs { display: flex; height: 100%; margin-left: 24px; overflow-x: auto; scrollbar-width: none; }
+    .brand { flex: none; width: 24px; height: 24px; margin-left: 12px; object-fit: contain; }
+    .menu-button + .brand { margin-left: 0; }
+    /* On a narrow screen the name gives way before the buttons do */
+    .main-title { font-size: 20px; font-weight: 400; line-height: 32px; margin-left: 12px; white-space: nowrap;
+      min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .tabs { display: flex; flex: 0 1 auto; min-width: 0; height: 100%; margin-left: 24px; overflow-x: auto; scrollbar-width: none; }
     .tab { display: flex; align-items: center; justify-content: center; height: 100%; padding: 0 20px; position: relative;
       color: var(--sidebar-text-color, var(--primary-text-color)); text-decoration: none; font-weight: 500; white-space: nowrap; opacity: 0.8; }
     .tab:hover { background: color-mix(in srgb, var(--primary-text-color) 5%, transparent); }

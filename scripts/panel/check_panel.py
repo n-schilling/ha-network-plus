@@ -583,6 +583,52 @@ async def _stamp(page: Page) -> str:
     return (await page.locator(f"{PANEL} #stamp").inner_text()).strip()
 
 
+async def _brand(page: Page, where: str) -> dict[str, Any]:
+    """The integration's icon left of the name, loaded from its own brand folder."""
+    # The token request comes after the frame: give the image its moment
+    brand = page.locator(f"{PANEL} #brand")
+    deadline = time.monotonic() + 15
+    while not await brand.evaluate("img => img.complete && img.naturalWidth > 0"):
+        expect(time.monotonic() < deadline, f"{where}: the icon does not load")
+        await page.wait_for_timeout(200)
+    info: dict[str, Any] = await page.locator(f"{PANEL} .toolbar").evaluate(
+        """bar => {
+            const img = bar.querySelector("#brand"), name = bar.querySelector(".main-title");
+            const box = (el) => el && el.getBoundingClientRect();
+            const b = box(img), n = box(name);
+            return {src: img.currentSrc || img.src, width: img.naturalWidth, shown: b.width,
+                    before: !!(img.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING),
+                    name: name.textContent.trim(), nameRight: n.right, nameTop: n.top, nameHeight: n.height,
+                    brandRight: b.right, barRight: box(bar).right,
+                    tabs: [...bar.querySelectorAll("nav.tabs a.tab")].map((t) => {
+                        const r = t.getBoundingClientRect();
+                        return {top: r.top, bottom: r.bottom, left: r.left};
+                    }),
+                    tools: box(bar.querySelector(".tools"))};
+        }"""
+    )
+    expect(
+        "/api/brands/integration/network_plus/" in info["src"] and "token=" in info["src"],
+        f"{where}: icon from {info['src']!r}",
+    )
+    expect(info["width"] > 0 and info["shown"] == 24, f"{where}: icon {info}")
+    expect(info["before"], f"{where}: the icon is not left of the name")
+    expect(info["name"] == "Network Plus", f"{where}: name {info['name']!r}")
+    return info
+
+
+async def _row(page: Page, where: str) -> None:
+    """Wide screen: icon, name and tabs in one row, no second header row."""
+    info = await _brand(page, where)
+    expect(len(info["tabs"]) == 5, f"{where}: {len(info['tabs'])} tabs in the header")
+    name_middle = info["nameTop"] + info["nameHeight"] / 2
+    for tab in info["tabs"]:
+        expect(
+            tab["top"] <= name_middle <= tab["bottom"] and tab["left"] >= info["nameRight"],
+            f"{where}: a tab not in the row of the name {tab} / {info}",
+        )
+
+
 async def _header(page: Page, where: str) -> None:
     """The end of the header: stamp, refresh, settings, in this order and nothing else."""
     parts = await page.locator(f"{PANEL} .toolbar .tools").evaluate(
@@ -716,13 +762,16 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
             if tab != "uplinks":
                 await _tab(page, tab)
             await _header(page, tab)
+            await _row(page, tab)
             expect(
                 await page.locator(f"{PANEL} .toolbar select").count() == 0,
                 f"{tab}: the console choice in the header",
             )
             expect(await page.locator(f"{PANEL} #stamp").is_visible(), f"{tab}: stamp hidden")
 
-    await checks.run("header on every tab: stamp, refresh and settings in this order", header)
+    await checks.run(
+        "header on every tab: icon, name and tabs in one row; stamp, refresh, settings", header
+    )
 
     async def switch_state(entity_id: str, wanted: str) -> None:
         deadline = time.monotonic() + 30
@@ -824,8 +873,20 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
                 )
                 expect(overflow <= 0, f"{scheme}/{tab}: page scrolls sideways by {overflow} px")
             expect(
-                await phone.locator(f"{PANEL} nav.bottom-tabs a.tab").count() == 5,
+                await phone.locator(f"{PANEL} nav.bottom-tabs a.tab").count() == 5
+                and await phone.locator(f"{PANEL} .toolbar nav.tabs").count() == 0,
                 "tabs at the bottom on a phone",
+            )
+            # Icon (the dark one falls back to the light), name and buttons fit the row
+            info = await _brand(phone, f"{scheme} phone")
+            expect(
+                ("/dark_icon" in info["src"]) == (scheme == "dark"),
+                f"{scheme} phone: icon {info['src']!r}",
+            )
+            expect(
+                info["brandRight"] <= info["nameRight"] <= info["tools"]["left"]
+                and info["tools"]["right"] <= info["barRight"],
+                f"{scheme} phone: header row does not fit {info}",
             )
             expect(
                 not await phone.locator(f"{PANEL} #stamp").is_visible()
@@ -849,7 +910,8 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
             await phone.context.close()
 
     await checks.run(
-        "phone width and dark mode: no sideways scrolling, tabs at the bottom", phone_and_dark
+        "phone width and dark mode: no sideways scrolling, icon and buttons fit, tabs at the bottom",
+        phone_and_dark,
     )
 
     async def admin_only() -> None:
