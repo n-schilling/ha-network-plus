@@ -69,10 +69,9 @@ jobs:
         id: python
         with:
           python-version: "3.14"
-          cache: pip
-          cache-dependency-path: requirements_test.txt
-      # The whole virtual environment, by Python version and requirements: on
-      # a hit nothing is installed; on a miss pip takes its wheels from the cache
+      # The whole virtual environment, by the exact Python version and the
+      # requirements: on a hit nothing is installed. No pip cache besides: its
+      # key changes with the same inputs, so it would only cost time to restore
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: venv
         with:
@@ -103,11 +102,9 @@ jobs:
         id: python
         with:
           python-version: "3.14"
-          cache: pip
-          cache-dependency-path: requirements_panel.txt
       # Home Assistant starts only inside a virtual environment. The whole of
-      # it, by Python version and requirements: on a hit nothing is installed;
-      # on a miss pip takes its wheels from the cache
+      # it, by the exact Python version and the requirements: on a hit nothing
+      # is installed (no pip cache besides, as in Tests)
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: venv
         with:
