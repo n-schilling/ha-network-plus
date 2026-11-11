@@ -90,6 +90,13 @@ jobs:
         run: |
           python -m venv .venv-panel
           .venv-panel/bin/pip install -r requirements_panel.txt
-          .venv-panel/bin/python -m playwright install --with-deps chromium
+          # The runner's Google Chrome, like Crash Guard; Playwright's Chromium
+          # (and its packages from apt) only where there is none
+          if ! command -v google-chrome > /dev/null; then
+            .venv-panel/bin/python -m playwright install --with-deps chromium
+          fi
       - name: Check the page in a browser
-        run: .venv-panel/bin/python -I scripts/panel/check_panel.py --browser chromium
+        run: |
+          browser=chromium
+          if command -v google-chrome > /dev/null; then browser=chrome; fi
+          .venv-panel/bin/python -I scripts/panel/check_panel.py --browser "$browser"

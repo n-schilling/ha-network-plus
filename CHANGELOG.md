@@ -14,6 +14,7 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 - The choice of the console (with more than one) moved from the toolbar to the top of the page, above the cards.
 - The page check (CI job Page) tests the header on every tab: the order stamp, refresh, settings; that refresh sends the request again, shows the changed data and a new time; that settings opens the integration's page without reloading; the stamp hidden on a phone.
+- CI job Page uses the runner's Google Chrome, like Crash Guard, and installs Playwright's Chromium with its apt packages only where there is none, so an unreachable Ubuntu mirror no longer fails it.
 
 ## [0.9.1] - 2026-11-11
 
