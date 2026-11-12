@@ -521,7 +521,7 @@ uv venv --python 3.14 && uv pip install -r requirements_test.txt
 scripts/check.sh
 ```
 
-`scripts/check.sh` runs what CI runs: ruff, the changelog and translation checks, mypy, the tests with their coverage threshold, the page checks and hassfest in Docker.
+`scripts/check.sh` runs what CI runs: ruff, the changelog and translation checks, mypy, the tests with their coverage threshold, the page checks and hassfest in Docker. The page check is not part of CI: run `scripts/check.sh` before a release that changes the page.
 
 The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own certificates) and a throwaway Home Assistant, reachable from this machine only, add the consoles through the config flow (one pinned, one with the check off), and drive the page in a headless browser (all tabs, the header with icon, name, tabs in the same row, stamp, refresh and settings, the console choice, version line, phone width, dark mode, no page and no admin writes for non-administrators), then stop Home Assistant again. They need their own environment:
 
