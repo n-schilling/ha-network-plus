@@ -16,23 +16,23 @@ What it is for, for example:
 
 The page, made up for these pictures: the uplinks with the gateway's summary, the cable, the LTE uplink and the LTE backup's data plan:
 
-<img src="docs/screenshots/uplinks.png" alt="The Uplinks tab: the gateway's summary, the main uplink, the LTE uplink and the LTE backup's data plan" width="700">
+<img src="docs/screenshots/uplinks.png" alt="Uplinks, Status: the gateway's summary, the main uplink, the LTE uplink and the LTE backup's data plan" width="700">
 
 The history of failovers, returns, outages and new public addresses, by day:
 
-<img src="docs/screenshots/history.png" alt="The History tab: failovers to LTE and back with their duration, the uplink down and up again, new public addresses" width="700">
+<img src="docs/screenshots/history.png" alt="Uplinks, History: failovers to LTE and back with their duration, the uplink down and up again, new public addresses" width="700">
 
 The speed tests per uplink over two months, and every result:
 
-<img src="docs/screenshots/speedtests.png" alt="The Speed tests tab: download over time, one line per uplink, and the results" width="700">
+<img src="docs/screenshots/speedtests.png" alt="Tests, Speed tests: download over time, one line per uplink, and the results" width="700">
 
 Every backup drill with failover time, return time, LTE data and the averages:
 
-<img src="docs/screenshots/drills.png" alt="The Drills tab: three drills with failover time, return time, LTE data and the averages" width="700">
+<img src="docs/screenshots/drills.png" alt="Tests, Drills: three drills with failover time, return time, LTE data and the averages" width="700">
 
 On a phone, in dark mode:
 
-<img src="docs/screenshots/phone-dark.png" alt="The Uplinks tab on a phone in dark mode, the tabs at the bottom" width="300">
+<img src="docs/screenshots/phone-dark.png" alt="Uplinks, Status on a phone in dark mode, the areas at the bottom" width="300">
 
 ## Design
 
@@ -106,17 +106,19 @@ If the console has an LTE backup device, it gets a device of its own below the g
 
 ### The page
 
-**Network Plus** in the sidebar, for administrators. It shows one console at a time (a choice above the cards when there are several) and reads it again every 30 seconds while it is open. The header is one row, like on every page of these integrations and apps: the integration's icon and name, the tabs right after the name, and at the end the time the page last got its data ("As of 14:02:37", hidden on a phone), **Refresh** (reads the data again at once) and **Settings** (Home Assistant's page of the integration):
+**Network Plus** in the sidebar, for administrators. It shows one console at a time (a choice above the cards when there are several; the chosen one is in the address, `?console=…`) and reads it again every 30 seconds while it is open. The page is Home Assistant's own frame with three areas as tabs, each with two pages below the header; at the end of the header the time the page last got its data ("As of 14:02:37", hidden on a phone), **Refresh** (reads the data again at once) and **Integration in Home Assistant** (Home Assistant's page of the integration):
 
-- **Uplinks**: the active uplink, latency, last switch, last speed test and last drill; per uplink its state, the gateway's latency and availability, the negotiated link speed against the expected one, port, connection type and public addresses; the LTE backup with data used against the plan and the signal.
-- **History**: failovers and returns with how long the backup carried the traffic, brief failovers, uplinks going down and up with how long they were gone, new public addresses (the uplink and the family, not the address).
-- **Speed tests**: download over time per uplink, and every result with upload and ping.
-- **Backup drills**: every drill with failover time, return time and LTE data, and the averages.
-- **Remote access**: the Teleport and VPN clients connected now, and the finished sessions.
+- **Uplinks › Status** (`/network-plus/uplinks/status`): the active uplink, latency, last switch, last speed test and last drill; per uplink its state, the gateway's latency and availability, the negotiated link speed against the expected one, port, connection type and public addresses; the LTE backup with data used against the plan and the signal.
+- **Uplinks › History** (`/uplinks/history`): failovers and returns with how long the backup carried the traffic, brief failovers, uplinks going down and up with how long they were gone, new public addresses (the uplink and the family, not the address).
+- **Tests › Speed tests** (`/tests/speedtests`): download over time per uplink, and every result with upload and ping.
+- **Tests › Drills** (`/tests/drills`): every backup drill with failover time, return time and LTE data, and the averages.
+- **Remote › Connected now** and **Remote › Sessions** (`/remote/now`, `/remote/sessions`): the Teleport and VPN clients connected now, and the finished sessions.
+
+The addresses of before (`/network-plus/events`, `/speedtests`, `/drills`, `/uplinks`, `/remote`) lead to the page that took their place. Explanations, such as how long something is kept, sit behind an (i) in a card's title.
 
 The history is kept by the integration in a store of its own (`.storage/network_plus.history.<entry>`), not in the recorder, for 365 days (option *Keep history*, 1 to 3650 days); backup drills stay. It starts with the installation: nothing from before is shown. Removing the console removes its history.
 
-At the bottom the page shows the version of the integration. The page is built from Home Assistant's own elements and follows its theme, dark mode and phone width. On a narrow screen (Home Assistant's own "narrow", below 870 px, phones and small tablets) the tabs move to a bar at the bottom with an icon each, as on Home Assistant's own settings pages; the header keeps the menu button, icon, name, Refresh and Settings, and the name is shortened before the buttons would be pushed out.
+At the bottom of every page the page shows the version of the integration, also when the data could not be read. The page is built from Home Assistant's own elements and follows its theme, its language (English or German) and the number format of the user's profile, dark mode and phone width. On a narrow screen (Home Assistant's own "narrow", below 870 px, phones and small tablets) the areas move to Home Assistant's bar at the bottom.
 
 ### Admin features (opt-in)
 
@@ -485,7 +487,7 @@ Of an LTE backup device:
 
 ### WebSocket command
 
-`network_plus/overview` (administrators only), optional `entry_id`: the consoles, the chosen one's uplinks, LTE backup, remote clients and history, and the integration's `version`. The page reads it every 30 seconds while it is open.
+`network_plus/overview` (administrators only), optional `entry_id`: the consoles, the chosen one's uplinks, LTE backup, remote clients and history. The page reads it every 30 seconds while it is open. `network_plus/about` (administrators only): the integration's `version`, for the line at the bottom of the page.
 
 ## Installation
 
@@ -523,7 +525,7 @@ scripts/check.sh
 
 `scripts/check.sh` runs what CI runs: ruff, the changelog and translation checks, mypy, the tests with their coverage threshold, the page checks and hassfest in Docker. The page check is not part of CI: run `scripts/check.sh` before a release that changes the page.
 
-The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own certificates) and a throwaway Home Assistant, reachable from this machine only, add the consoles through the config flow (one pinned, one with the check off), and drive the page in a headless browser (all tabs, the header with icon, name, tabs in the same row, stamp, refresh and settings, the console choice, version line, phone width, dark mode, no page and no admin writes for non-administrators), then stop Home Assistant again. They need their own environment:
+The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own certificates) and a throwaway Home Assistant, reachable from this machine only, add the consoles through the config flow (one pinned, one with the check off), and drive the page in a headless browser (every page in Home Assistant's frame with its three areas, the page's own tab, stamp, refresh and the integration button; old addresses, the console in the address and a change of the query alone; every (i); an unknown console as one error line; a console not loaded; numbers with a decimal comma and in German; refresh; the version line; phone width, dark mode; no page and no admin writes for non-administrators), then stop Home Assistant again. They need their own environment:
 
 ```bash
 uv venv --python 3.14 .venv-panel && uv pip install --python .venv-panel/bin/python -r requirements_panel.txt

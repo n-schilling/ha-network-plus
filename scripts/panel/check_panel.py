@@ -5,8 +5,16 @@ certificates) and Home Assistant in a temporary directory, both reachable from
 this machine only (see run_hass.py). The consoles are added through the config
 flow, the first with its certificate pinned and the admin opt-in; a made-up
 history goes into the first one's store. Then Playwright drives the page and
-the checks look at what it shows and who may do what. Home Assistant is stopped
-through its own stop action at the end, also after a failure.
+the checks look at what it shows and who may do what, as STANDARD.md §7 "Page
+check" lists it: on every page Home Assistant's frame with the three areas (one
+active) and the menu button, the page's own tab, stamp, refresh and the
+integration button; the areas at the bottom on a phone, no sideways scrolling;
+old addresses and a change of the query alone; every (i); an error as one line
+with the message behind its (i); numbers in the profile's format (a decimal
+comma, German); refresh; the integration button. The page has no settings, no
+subpages and no drawing, so there are no settings rows, no save button and no
+arrow keys to check. Home Assistant is stopped through its own stop action at
+the end, also after a failure.
 
 Usage (from the repository root, with the packages of requirements_panel.txt):
 
@@ -530,6 +538,15 @@ def expect(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+async def _until(check: Callable[[], Awaitable[bool]], what: str, seconds: float = 15) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if await check():
+            return
+        await asyncio.sleep(0.2)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
 async def _open(
     browser: Browser, instance: Instance, user: tuple[str, str], **options: Any
 ) -> Page:
@@ -557,13 +574,13 @@ async def _open(
 async def _ready(page: Page) -> None:
     """The page shows a console and Home Assistant's loading screen has faded out."""
     # The first load of the frontend takes a while on a slow CI machine
-    await page.locator(f"{PANEL} ha-card").first.wait_for(timeout=90000)
+    await page.locator(f"{PANEL} #sheet ha-card").first.wait_for(timeout=90000)
     await page.locator("#ha-launch-screen").wait_for(state="detached")
 
 
-async def _tab(page: Page, tab: str) -> None:
-    await page.locator(f"{PANEL} a[data-tab='{tab}']").first.click()
-    await page.locator(f"{PANEL} a.tab.active[data-tab='{tab}']").first.wait_for()
+async def _goto(page: Page, instance: Instance, path: str) -> None:
+    """A page of the panel by its address, loaded anew."""
+    await page.goto(f"{instance.base}/network-plus/{path}")
     await _ready(page)
     await page.wait_for_timeout(300)
 
@@ -575,85 +592,105 @@ async def _text(page: Page) -> str:
 STAMP = re.compile(r"As of \d{2}:\d{2}:\d{2}")
 # mdi:refresh and mdi:cog-outline, as Home Assistant and the other pages draw them
 REFRESH_ICON = "M17.65,6.35"
-SETTINGS_ICON = "M12,8A4,4 0 0,1 16,12"
-SETTINGS_PATH = "/config/integrations/integration/network_plus"
+INTEGRATION_ICON = "M12,8A4,4 0 0,1 16,12"
+INTEGRATION_PATH = "/config/integrations/integration/network_plus"
+# The areas, their pages and the address of each
+AREAS = {
+    "uplinks": ("status", "history"),
+    "tests": ("speedtests", "drills"),
+    "remote": ("now", "sessions"),
+}
+PAGES = [f"{area}/{page}" for area, pages in AREAS.items() for page in pages]
+# Home Assistant's elements the page uses; all of them on the list of STANDARD.md §7
+ELEMENTS = [
+    "hass-tabs-subpage",
+    "ha-tab-group",
+    "ha-tab-group-tab",
+    "ha-card",
+    "ha-alert",
+    "ha-icon-button",
+    "ha-svg-icon",
+    "ha-tooltip",
+    "ha-select",
+    "ha-badge",
+]
 
 
 async def _stamp(page: Page) -> str:
     return (await page.locator(f"{PANEL} #stamp").inner_text()).strip()
 
 
-async def _brand(page: Page, where: str) -> dict[str, Any]:
-    """The integration's icon left of the name, loaded from its own brand folder."""
-    # The token request comes after the frame: give the image its moment
-    brand = page.locator(f"{PANEL} #brand")
-    deadline = time.monotonic() + 15
-    while not await brand.evaluate("img => img.complete && img.naturalWidth > 0"):
-        expect(time.monotonic() < deadline, f"{where}: the icon does not load")
-        await page.wait_for_timeout(200)
-    info: dict[str, Any] = await page.locator(f"{PANEL} .toolbar").evaluate(
-        """bar => {
-            const img = bar.querySelector("#brand"), name = bar.querySelector(".main-title");
-            const box = (el) => el && el.getBoundingClientRect();
-            const b = box(img), n = box(name);
-            return {src: img.currentSrc || img.src, width: img.naturalWidth, shown: b.width,
-                    before: !!(img.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING),
-                    name: name.textContent.trim(), nameRight: n.right, nameTop: n.top, nameHeight: n.height,
-                    brandRight: b.right, barRight: box(bar).right,
-                    tabs: [...bar.querySelectorAll("nav.tabs a.tab")].map((t) => {
-                        const r = t.getBoundingClientRect();
-                        return {top: r.top, bottom: r.bottom, left: r.left};
-                    }),
-                    tools: box(bar.querySelector(".tools"))};
+async def _frame(page: Page, where: str, *, page_id: str, phone: bool = False) -> None:
+    """STANDARD.md §7: Home Assistant's frame with the three areas as tabs (one
+    active, in the header on a wide screen, at the bottom on a narrow one) and
+    the menu button; the page's own tab active below it; at the end of the header
+    stamp, refresh and the integration button, in this order and nothing else."""
+    h: dict[str, Any] = await page.locator(PANEL).evaluate(
+        """el => {
+            const root = el.shadowRoot, frame = root.getElementById("frame");
+            const bar = frame.shadowRoot.getElementById("tabbar");
+            const tabs = bar ? [...bar.querySelectorAll("ha-tab")] : [];
+            const active = root.querySelector("#subtabs ha-tab-group-tab[active]");
+            return {
+                tabs: tabs.length, active: tabs.filter((t) => t.active).length,
+                activeName: (tabs.find((t) => t.active)?.textContent || "").trim(),
+                bottom: !!bar && bar.classList.contains("bottom-bar"),
+                menu: !!frame.shadowRoot.querySelector("ha-menu-button"),
+                back: !!frame.shadowRoot.querySelector("ha-icon-button-arrow-prev"),
+                page: active ? active.getAttribute("panel") : null,
+                parts: [...root.querySelector("[slot=toolbar-icon]").children].map((c) => ({
+                    tag: c.localName, id: c.id, label: c.getAttribute("label"),
+                    path: c.getAttribute("path") || "", text: c.textContent.trim(),
+                    visible: getComputedStyle(c).display !== "none"})),
+            };
         }"""
     )
+    expect(h["menu"] and not h["back"], f"{where}: no menu button in the frame ({h})")
+    expect(h["tabs"] == 3 and h["active"] == 1, f"{where}: areas {h}")
+    expect(h["bottom"] == phone, f"{where}: areas {'not ' if phone else ''}at the bottom ({h})")
+    expect(h["page"] == page_id, f"{where}: tab of the page {h['page']!r}, not {page_id!r}")
+    shape = [(p["tag"], p["id"]) for p in h["parts"]]
     expect(
-        "/api/brands/integration/network_plus/" in info["src"] and "token=" in info["src"],
-        f"{where}: icon from {info['src']!r}",
-    )
-    expect(info["width"] > 0 and info["shown"] == 24, f"{where}: icon {info}")
-    expect(info["before"], f"{where}: the icon is not left of the name")
-    expect(info["name"] == "Network Plus", f"{where}: name {info['name']!r}")
-    return info
-
-
-async def _row(page: Page, where: str) -> None:
-    """Wide screen: icon, name and tabs in one row, no second header row."""
-    info = await _brand(page, where)
-    expect(len(info["tabs"]) == 5, f"{where}: {len(info['tabs'])} tabs in the header")
-    name_middle = info["nameTop"] + info["nameHeight"] / 2
-    for tab in info["tabs"]:
-        expect(
-            tab["top"] <= name_middle <= tab["bottom"] and tab["left"] >= info["nameRight"],
-            f"{where}: a tab not in the row of the name {tab} / {info}",
-        )
-
-
-async def _header(page: Page, where: str) -> None:
-    """The end of the header: stamp, refresh, settings, in this order and nothing else."""
-    parts = await page.locator(f"{PANEL} .toolbar .tools").evaluate(
-        """el => [...el.children].map((c) => ({
-            tag: c.localName, id: c.id, label: c.getAttribute("label"),
-            path: c.getAttribute("path") || "", text: c.textContent.trim()}))"""
-    )
-    shape = [(part["tag"], part["id"]) for part in parts]
-    expect(
-        shape == [("span", "stamp"), ("ha-icon-button", "refresh"), ("ha-icon-button", "settings")],
+        shape
+        == [("span", "stamp"), ("ha-icon-button", "refresh"), ("ha-icon-button", "integration")],
         f"{where}: header ends with {shape}",
     )
-    expect(bool(STAMP.fullmatch(parts[0]["text"])), f"{where}: stamp {parts[0]['text']!r}")
+    stamp, refresh, integration = h["parts"]
+    expect(bool(STAMP.fullmatch(stamp["text"])), f"{where}: stamp {stamp['text']!r}")
+    expect(stamp["visible"] != phone, f"{where}: stamp {'shown' if phone else 'hidden'}")
     expect(
-        parts[1]["label"] == "Refresh" and parts[1]["path"].startswith(REFRESH_ICON),
-        f"{where}: refresh button {parts[1]}",
+        refresh["label"] == "Refresh" and refresh["path"].startswith(REFRESH_ICON),
+        f"{where}: refresh {refresh}",
     )
     expect(
-        parts[2]["label"] == "Settings" and parts[2]["path"].startswith(SETTINGS_ICON),
-        f"{where}: settings button {parts[2]}",
+        integration["label"] == "Integration in Home Assistant"
+        and integration["path"].startswith(INTEGRATION_ICON),
+        f"{where}: integration button {integration}",
     )
+
+
+async def _helps(page: Page, where: str) -> int:
+    """Every (i) is Home Assistant's icon button with its tooltip, shown on hover and on a tap."""
+    helps: list[dict[str, Any]] = await page.locator(PANEL).evaluate(
+        """el => [...el.shadowRoot.querySelectorAll("ha-icon-button.help")].map((b) => {
+            const tip = el.shadowRoot.querySelector(`ha-tooltip[for="${b.id}"]`);
+            return {label: b.getAttribute("label"), trigger: tip?.getAttribute("trigger"),
+                    text: (tip?.textContent || "").trim()};
+        })"""
+    )
+    for help_ in helps:
+        expect(
+            help_["label"] == "Explanation"
+            and help_["trigger"] == "hover click"
+            and bool(help_["text"]),
+            f"{where}: (i) {help_}",
+        )
+    return len(helps)
 
 
 async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path | None) -> Checks:
     page = await _open(browser, instance, ADMIN)
+    gateway_id, office_id = instance.entry_ids["Gateway"], instance.entry_ids["Office"]
     # The overview requests the page sends over the WebSocket
     overviews: list[float] = []
 
@@ -670,107 +707,313 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
     page.on("websocket", watch)
 
     async def from_start() -> None:
-        """Every check starts on the first tab, whatever the one before left behind."""
-        await page.goto(f"{instance.base}/network-plus/uplinks")
-        await _ready(page)
+        """Every check starts on the first page, whatever the one before left behind."""
+        await _goto(page, instance, "uplinks/status")
 
     checks = Checks(before=from_start)
     for name in instance.flow_checks:
         checks.passed.append(name)
         print(f"ok   {name}")
 
-    async def uplinks() -> None:
+    async def status() -> None:
         text = await _text(page)
         for part in ("Gateway", "WAN", "LTE Failover WAN", "LTE backup", "198.51.100.23"):
-            expect(part in text, f"{part!r} missing on the Uplinks tab")
-        defined = await page.evaluate(
-            "() => ['ha-card', 'ha-alert', 'ha-icon-button'].filter((n) => !customElements.get(n))"
+            expect(part in text, f"{part!r} missing on Uplinks: Status")
+        missing = await page.evaluate(
+            f"() => {json.dumps(ELEMENTS)}.filter((n) => !customElements.get(n))"
         )
-        expect(not defined, f"Home Assistant elements not available: {defined}")
+        expect(not missing, f"Home Assistant elements not available: {missing}")
         cards = await page.locator(f"{PANEL} ha-card").count()
         expect(cards >= 4, f"4 cards expected, got {cards}")
-        expect(
-            await page.locator(f"{PANEL} .card, {PANEL} button.icon-button").count() == 0,
-            "own copies of Home Assistant's elements",
+        # Only Home Assistant's elements: no home-made chips, tabs, selects or icons
+        own = await page.locator(PANEL).evaluate(
+            """el => [...el.shadowRoot.querySelectorAll(
+                "select, .chip, .tab, nav, ha-icon, ha-menu-button, ha-top-app-bar-fixed, svg.mdi")]
+                .map((e) => e.localName + "." + e.className)"""
         )
+        expect(not own, f"own copies of Home Assistant's elements: {own}")
+        # Every state has a word, not only a colour
+        badges = await page.locator(f"{PANEL} ha-badge").all_inner_texts()
+        expect("Online" in badges and "active" in badges, f"badges {badges}")
+        bar = await page.locator(f"{PANEL} .bar").get_attribute("aria-label")
+        expect(bool(bar) and "% of the data plan used" in (bar or ""), f"LTE bar label {bar!r}")
         about = (await page.locator(f"{PANEL} #about").inner_text()).strip()
         expect(about == f"Network Plus {VERSION}", f"version line: {about!r}")
         if shots is not None:
             await page.screenshot(path=str(shots / "uplinks.png"))
 
     await checks.run(
-        "uplinks, LTE backup and the version line from Home Assistant's cards", uplinks
+        "Uplinks, Status: uplinks, LTE backup, states in words and the version line", status
+    )
+
+    async def every_page() -> None:
+        for path in PAGES:
+            await _goto(page, instance, path)
+            await _frame(page, path, page_id=path.split("/")[1])
+            await _helps(page, path)
+            about = (await page.locator(f"{PANEL} #about").inner_text()).strip()
+            expect(about == f"Network Plus {VERSION}", f"{path}: version line {about!r}")
+
+    await checks.run(
+        "every page: the three areas, its own tab, stamp, refresh, integration, (i), version",
+        every_page,
     )
 
     async def history() -> None:
-        await _tab(page, "events")
+        await _goto(page, instance, "uplinks/history")
         text = await _text(page)
         expect("Switched to LTE Failover WAN" in text, "failover missing")
         expect("Back on WAN" in text and "after 18 min" in text, "return with its duration missing")
         expect("New public IPv6 address" in text, "address change missing")
         expect("198.51.100" not in text, "an address in the history")
+        kinds = set(
+            await page.locator(PANEL).evaluate(
+                """el => [...el.shadowRoot.querySelectorAll(".item .kind")]
+                    .map((k) => k.getAttribute("aria-label"))"""
+            )
+        )
+        expect(kinds == {"Switch", "Back", "Outage", "Change"}, f"kinds in words {kinds}")
+        expect(await _helps(page, "history") == 1, "the kept days behind the card's (i)")
         if shots is not None:
             await page.screenshot(path=str(shots / "history.png"))
 
-    await checks.run("history: switches with durations, no addresses", history)
+    await checks.run("Uplinks, History: switches with durations, kinds in words", history)
 
     async def speedtests() -> None:
-        await _tab(page, "speedtests")
+        await _goto(page, instance, "tests/speedtests")
         expect(await page.locator(f"{PANEL} svg.chart polyline").count() == 2, "two lines expected")
+        label = await page.locator(f"{PANEL} svg.chart").get_attribute("aria-label") or ""
+        expect("WAN" in label and "LTE Failover WAN" in label, f"chart label {label!r}")
         rows = await page.locator(f"{PANEL} table.data tr").count()
         expect(rows == 34, f"33 results and a head expected, got {rows} rows")
         if shots is not None:
             await page.screenshot(path=str(shots / "speedtests.png"))
 
-    await checks.run("speed tests: a line per uplink and every result", speedtests)
+    await checks.run("Tests, Speed tests: a line per uplink, its label, every result", speedtests)
 
     async def drills() -> None:
-        await _tab(page, "drills")
+        await _goto(page, instance, "tests/drills")
         text = await _text(page)
         expect("Average" in text, "average of the drills missing")
         expect(await page.locator(f"{PANEL} table.data tr").count() == 5, "3 drills, head, average")
         if shots is not None:
             await page.screenshot(path=str(shots / "drills.png"))
 
-    await checks.run("drills with their average", drills)
+    await checks.run("Tests, Drills with their average", drills)
 
     async def remote() -> None:
-        await _tab(page, "remote")
+        await _goto(page, instance, "remote/now")
         text = await _text(page)
-        expect("Travel tablet" in text and "Laptop" in text, "remote clients missing")
         expect("Desk" not in text, "a local client among the remote ones")
+        await _goto(page, instance, "remote/sessions")
+        text = await _text(page)
+        expect("Travel tablet" in text and "Laptop" in text, "remote sessions missing")
 
-    await checks.run("remote clients now and their sessions", remote)
+    await checks.run("Remote: the clients now and the finished sessions", remote)
+
+    async def in_app_tabs() -> None:
+        # The page's tab and Home Assistant's area tab navigate without a reload
+        await page.evaluate("window.__noReload = true")
+        await page.locator(f"{PANEL} ha-tab-group-tab[panel='history']").click()
+        await page.wait_for_url("**/network-plus/uplinks/history")
+        await page.locator(f"{PANEL} .item").first.wait_for()
+        await page.locator(PANEL).evaluate(
+            """el => [...el.shadowRoot.getElementById("frame").shadowRoot
+                .querySelectorAll("#tabbar ha-tab")][1].click()"""
+        )
+        await page.wait_for_url("**/network-plus/tests/speedtests")
+        await page.locator(f"{PANEL} svg.chart").wait_for()
+        await _frame(page, "after the area tab", page_id="speedtests")
+        expect(await page.evaluate("window.__noReload === true"), "a tab reloaded the page")
+
+    await checks.run("the tabs of the pages and of the areas navigate in the app", in_app_tabs)
+
+    async def old_addresses() -> None:
+        for old, new in (
+            ("", "/network-plus/uplinks/status"),
+            ("uplinks", "/network-plus/uplinks/status"),
+            ("events", "/network-plus/uplinks/history"),
+            ("speedtests", "/network-plus/tests/speedtests"),
+            ("drills", "/network-plus/tests/drills"),
+            ("remote", "/network-plus/remote/now"),
+        ):
+            await page.goto(f"{instance.base}/network-plus/{old}")
+            await page.wait_for_url(f"**{new}")
+            await _ready(page)
+        # The query goes along
+        await page.goto(f"{instance.base}/network-plus/events?console={office_id}")
+        await page.wait_for_url(f"**/network-plus/uplinks/history?console={office_id}")
+
+    await checks.run("old addresses lead to the pages that took their place", old_addresses)
 
     async def console_choice() -> None:
-        choice = page.locator(f"{PANEL} select#console")
-        await choice.select_option(label="Office")
-        await page.locator(f"{PANEL} ha-card .card-header", has_text="Office").first.wait_for()
+        header = page.locator(f"{PANEL} ha-card .card-header").first
+        select = page.locator(f"{PANEL} ha-select#console")
+        expect(
+            await select.evaluate("s => s.label") == "Console"
+            and await select.evaluate("s => s.value") == gateway_id,
+            "the choice does not show the first console",
+        )
+        await select.evaluate(
+            "(s, v) => s.dispatchEvent(new CustomEvent('selected', {detail: {value: v}, bubbles: true, composed: true}))",
+            office_id,
+        )
+        await page.wait_for_url(f"**/network-plus/uplinks/status?console={office_id}")
+        await header.filter(has_text="Office").wait_for()
         text = await _text(page)
         expect("203.0.113.45" in text, "the other console's uplink missing")
-        expect("Drills need the admin opt-in" not in text, "wrong tab")
-        await page.wait_for_timeout(500)
-        header = await page.locator(f"{PANEL} ha-card .card-header").first.inner_text()
-        expect(header.startswith("Office"), f"the choice went back: {header!r}")
-        await choice.select_option(label="Gateway")
-        await page.locator(f"{PANEL} ha-card .card-header", has_text="Gateway").first.wait_for()
+        # Another area keeps the console
+        await page.locator(PANEL).evaluate(
+            """el => [...el.shadowRoot.getElementById("frame").shadowRoot
+                .querySelectorAll("#tabbar ha-tab")][2].click()"""
+        )
+        await page.wait_for_url(f"**/network-plus/remote/now?console={office_id}")
+        # A change of the query alone, like a link of Home Assistant: the other console
+        await page.evaluate(
+            """id => {
+                history.pushState(null, "", `/network-plus/uplinks/status?console=${id}`);
+                window.dispatchEvent(new CustomEvent("location-changed", {detail: {replace: false}}));
+            }""",
+            gateway_id,
+        )
+        await header.filter(has_text="Gateway").wait_for()
+        expect(await select.evaluate("s => s.value") == gateway_id, "the choice did not follow")
+        # Back: Office again, from the address alone
+        await page.go_back()
+        await page.wait_for_url(f"**/network-plus/remote/now?console={office_id}")
+        await page.locator(f"{PANEL} ha-tab-group-tab[panel='now'][active]").wait_for()
 
-    await checks.run("choosing another console shows it and keeps it", console_choice)
+        async def office() -> bool:
+            return bool(await select.evaluate("s => s.value") == office_id)
 
-    async def header() -> None:
-        for tab in ("uplinks", "events", "speedtests", "drills", "remote"):
-            if tab != "uplinks":
-                await _tab(page, tab)
-            await _header(page, tab)
-            await _row(page, tab)
-            expect(
-                await page.locator(f"{PANEL} .toolbar select").count() == 0,
-                f"{tab}: the console choice in the header",
-            )
-            expect(await page.locator(f"{PANEL} #stamp").is_visible(), f"{tab}: stamp hidden")
+        await _until(office, "the choice back on Office")
+        # A reload keeps it
+        await _goto(page, instance, f"uplinks/status?console={office_id}")
+        await header.filter(has_text="Office").wait_for()
 
     await checks.run(
-        "header on every tab: icon, name and tabs in one row; stamp, refresh, settings", header
+        "the console in the address: chosen, kept across areas, changed by the query alone",
+        console_choice,
+    )
+
+    async def unknown_console() -> None:
+        await page.goto(f"{instance.base}/network-plus/uplinks/status?console=nope")
+        alert = page.locator(
+            f"{PANEL} ha-alert[alert-type='error']",
+            has_text="This console is not set up (any more).",
+        )
+        await alert.wait_for(timeout=60000)
+        said = await alert.locator("ha-tooltip").evaluate("el => el.textContent")
+        expect(said.strip().startswith("Message:"), f"message behind the (i): {said!r}")
+        expect(await page.locator(f"{PANEL} #sheet ha-card").count() == 0, "a console shown")
+        expect(
+            await page.locator(f"{PANEL} ha-alert[alert-type='error']").count() == 1,
+            "more than one error line",
+        )
+        # The choice offers the consoles, none chosen; the version line stays
+        await page.locator(f"{PANEL} ha-select#console").wait_for()
+        expect(
+            await page.locator(f"{PANEL} ha-select#console").evaluate("s => s.value") is None,
+            "a console chosen in place of the missing one",
+        )
+        about = (await page.locator(f"{PANEL} #about").inner_text()).strip()
+        expect(about == f"Network Plus {VERSION}", f"version line on an error: {about!r}")
+
+    await checks.run(
+        "an unknown console reads one error line, the message behind its (i)", unknown_console
+    )
+
+    async def not_loaded() -> None:
+        reply = await api.ws(
+            instance.token,
+            {"type": "config_entries/disable", "entry_id": office_id, "disabled_by": "user"},
+        )
+        expect(reply["success"], str(reply))
+        try:
+            await page.goto(f"{instance.base}/network-plus/uplinks/status?console={office_id}")
+            alert = page.locator(
+                f"{PANEL} ha-alert[alert-type='warning']",
+                has_text="This console is not loaded at the moment.",
+            )
+            await alert.wait_for(timeout=60000)
+            expect(await alert.locator("ha-icon-button.help").count() == 1, "no (i) on the line")
+        finally:
+            await api.ws(
+                instance.token,
+                {"type": "config_entries/disable", "entry_id": office_id, "disabled_by": None},
+            )
+
+            async def loaded() -> bool:
+                entries = await api.ws(
+                    instance.token, {"type": "config_entries/get", "domain": "network_plus"}
+                )
+                return all(e["state"] == "loaded" for e in entries["result"])
+
+            await _until(loaded, "Office loaded again", seconds=30)
+
+    await checks.run("a console not loaded: one line, the why behind its (i)", not_loaded)
+
+    async def tooltip_on_tap() -> None:
+        await _goto(page, instance, "tests/drills")
+        button = page.locator(f"{PANEL} ha-card ha-icon-button.help").first
+        await button.click()
+        tip = page.locator(f"{PANEL} ha-tooltip").first
+
+        async def shown() -> bool:
+            return bool(await tip.evaluate("t => t.open === true || t.hasAttribute('open')"))
+
+        await _until(shown, "the tooltip of the (i) after a tap", seconds=5)
+
+    await checks.run("a tap on the (i) shows its explanation", tooltip_on_tap)
+
+    async def locale(language: str, number_format: str) -> None:
+        """The user's profile: language and number format, as Home Assistant's profile page sets them."""
+        await page.evaluate(
+            """([language, format]) => {
+                const ha = document.querySelector("home-assistant");
+                ha.dispatchEvent(new CustomEvent("hass-language-select", {detail: language}));
+                ha.dispatchEvent(new CustomEvent("hass-number-format-select", {detail: format}));
+            }""",
+            [language, number_format],
+        )
+
+    async def numbers() -> None:
+        try:
+            # English with a decimal comma: the profile's number format, not the language's
+            await locale("en", "decimal_comma")
+
+            async def comma() -> bool:
+                return "99,8 %" in await _text(page)
+
+            await _until(comma, "99,8 % with a decimal_comma profile")
+            expect("Availability" in await _text(page), "the texts are not English")
+            # German: German texts, the language's comma
+            await locale("de", "language")
+
+            async def german() -> bool:
+                text = await _text(page)
+                return "Verfügbarkeit" in text and "99,8 %" in text
+
+            await _until(german, "German texts with 99,8 %")
+            tabs = await page.locator(f"{PANEL} ha-tab-group-tab").all_inner_texts()
+            expect([t.strip() for t in tabs] == ["Status", "Verlauf"], f"German tabs {tabs}")
+            label = await page.locator(f"{PANEL} #integration").get_attribute("label")
+            expect(label == "Integration in Home Assistant", f"German label {label!r}")
+            await _goto(page, instance, "tests/speedtests")
+            ticks = await page.locator(f"{PANEL} svg.chart text").all_text_contents()
+            expect(any("." in t for t in ticks[:6]), f"axis without German grouping {ticks}")
+        finally:
+            await locale("en", "language")
+
+            async def english() -> bool:
+                return "Results" in await _text(page) or "Availability" in await _text(page)
+
+            await _until(english, "the page in English again")
+        await _goto(page, instance, "uplinks/status")
+        expect("99.8 %" in await _text(page), "English numbers again")
+
+    await checks.run(
+        "numbers in the profile's format (decimal comma, German), texts in its language", numbers
     )
 
     async def switch_state(entity_id: str, wanted: str) -> None:
@@ -795,6 +1038,7 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
             for s in states["result"]
             if s["entity_id"].startswith("switch.gateway") and "enforce" in s["entity_id"]
         )
+        await page.evaluate("window.__noReload = true")
         try:
             for wanted, shown in (("on", "yes"), ("off", "no")):
                 before = await _stamp(page)
@@ -823,6 +1067,7 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
                     after != before and STAMP.fullmatch(after) is not None,
                     f"stamp {before!r} → {after!r}",
                 )
+            expect(await page.evaluate("window.__noReload === true"), "refresh reloaded the page")
         finally:
             # Whatever failed, the next checks start with the uplink on
             if instance.consoles[0].wan_type != "dhcp":
@@ -835,13 +1080,13 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
         "refresh fetches the data again over the WebSocket, spins and moves the stamp", refresh
     )
 
-    async def settings() -> None:
+    async def integration() -> None:
         await page.evaluate("window.__noReload = true")
-        await page.locator(f"{PANEL} #settings").click()
-        await page.wait_for_url(f"**{SETTINGS_PATH}")
+        await page.locator(f"{PANEL} #integration").click()
+        await page.wait_for_url(f"**{INTEGRATION_PATH}")
         expect(
             await page.evaluate("window.__noReload === true"),
-            "the settings button reloaded the whole page",
+            "the integration button reloaded the whole page",
         )
         await page.wait_for_function(
             """() => {
@@ -853,7 +1098,10 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
             timeout=30000,
         )
 
-    await checks.run("settings opens Home Assistant's page of the integration in the app", settings)
+    await checks.run(
+        "the integration button opens Home Assistant's page of the integration in the app",
+        integration,
+    )
 
     async def phone_and_dark() -> None:
         for scheme in ("light", "dark"):
@@ -864,35 +1112,18 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
                 viewport={"width": 390, "height": 844},
                 color_scheme=scheme,
             )
-            await _ready(phone)
-            for tab in ("uplinks", "events", "speedtests", "drills", "remote"):
-                await phone.goto(f"{instance.base}/network-plus/{tab}")
-                await _ready(phone)
+            for path in PAGES:
+                await _goto(phone, instance, path)
                 overflow = await phone.evaluate(
                     "() => document.documentElement.scrollWidth - document.documentElement.clientWidth"
                 )
-                expect(overflow <= 0, f"{scheme}/{tab}: page scrolls sideways by {overflow} px")
+                expect(overflow <= 0, f"{scheme}/{path}: page scrolls sideways by {overflow} px")
+            # The areas in Home Assistant's bar at the bottom; stamp hidden, buttons shown
+            await _frame(phone, f"{scheme} phone", page_id="sessions", phone=True)
             expect(
-                await phone.locator(f"{PANEL} nav.bottom-tabs a.tab").count() == 5
-                and await phone.locator(f"{PANEL} .toolbar nav.tabs").count() == 0,
-                "tabs at the bottom on a phone",
-            )
-            # Icon (the dark one falls back to the light), name and buttons fit the row
-            info = await _brand(phone, f"{scheme} phone")
-            expect(
-                ("/dark_icon" in info["src"]) == (scheme == "dark"),
-                f"{scheme} phone: icon {info['src']!r}",
-            )
-            expect(
-                info["brandRight"] <= info["nameRight"] <= info["tools"]["left"]
-                and info["tools"]["right"] <= info["barRight"],
-                f"{scheme} phone: header row does not fit {info}",
-            )
-            expect(
-                not await phone.locator(f"{PANEL} #stamp").is_visible()
-                and await phone.locator(f"{PANEL} #refresh").is_visible()
-                and await phone.locator(f"{PANEL} #settings").is_visible(),
-                "on a phone: stamp hidden, refresh and settings shown",
+                await phone.locator(f"{PANEL} #refresh").is_visible()
+                and await phone.locator(f"{PANEL} #integration").is_visible(),
+                f"{scheme} phone: refresh and integration button hidden",
             )
             background = await phone.locator(PANEL).evaluate(
                 "el => getComputedStyle(el).backgroundColor"
@@ -903,21 +1134,20 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
                 ]
                 expect(sum(channels) < 200, f"dark mode background is {background}")
                 if shots is not None:
-                    await phone.goto(f"{instance.base}/network-plus/uplinks")
-                    await _ready(phone)
-                    await phone.wait_for_timeout(300)
+                    await _goto(phone, instance, "uplinks/status")
                     await phone.screenshot(path=str(shots / "phone-dark.png"))
             await phone.context.close()
 
     await checks.run(
-        "phone width and dark mode: no sideways scrolling, icon and buttons fit, tabs at the bottom",
+        "phone width and dark mode: areas at the bottom, no sideways scrolling, buttons fit",
         phone_and_dark,
     )
 
     async def admin_only() -> None:
         token = await api.login(*USER)
-        reply = await api.ws(token, {"type": "network_plus/overview"})
-        expect(not reply["success"] and reply["error"]["code"] == "unauthorized", str(reply))
+        for command in ("network_plus/overview", "network_plus/about"):
+            reply = await api.ws(token, {"type": command})
+            expect(not reply["success"] and reply["error"]["code"] == "unauthorized", str(reply))
         panels = await api.ws(token, {"type": "get_panels"})
         expect("network-plus" not in panels["result"], "the page is offered to a user")
         states = await api.ws(instance.token, {"type": "get_states"})

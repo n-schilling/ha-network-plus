@@ -4,6 +4,19 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-17
+
+### Changed
+
+- **The page in Home Assistant's own frame, in three areas** (the page standard of these integrations): Uplinks (Status, History), Tests (Speed tests, Drills) and Remote (Connected now, Sessions) are Home Assistant's tabs in the header, at the bottom on a phone; the two pages of an area are Home Assistant's tabs below it. Addresses are `/network-plus/<area>/<page>`; the old ones (`/events`, `/speedtests`, `/drills`, `/uplinks`, `/remote`) lead to the page that took their place. Remote is split into the clients connected now and the finished sessions.
+- The chosen console is in the address (`?console=<entry>`), so reload, back and a link keep it, also across areas; the choice is Home Assistant's select. A console the address names that is not there reads as one error line instead of the first console in its place.
+- The button at the end of the header is labelled "Integration in Home Assistant", so it is not taken for settings of the page.
+- Explanations sit behind an (i) in a card's title or at the end of a line: how long the history, speed tests and sessions are kept, how a drill starts, why drills need the admin features, why a console is not loaded. States are one line each; an error reads one line by its kind with Home Assistant's message behind the (i).
+- States shown by a colour also have a word: Home Assistant's badges for online, active, preferred, backup and in use, an icon and a word for each kind in the history, "slower than expected" beside a slow link, a text for the LTE bar and its warning mark and for the speed test chart.
+- Numbers follow the number format of the user's profile (for example a decimal comma with English texts), not only the language.
+- The version line at the bottom comes from a command of its own (`network_plus/about`), so it stays when the data cannot be read; the overview no longer carries the version.
+- The page check tests what the page standard lists: the frame with its areas and the page's own tab on every page, old addresses, the console in the address and a change of the query alone, every (i), an error line, a console not loaded, numbers with a decimal comma and in German. A test makes sure both languages have the same text keys, none twice.
+
 ## [0.11.0] - 2026-11-11
 
 ### Added

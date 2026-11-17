@@ -197,10 +197,12 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   module URL with the version so a release is fetched anew). It stays through
   a reload, so an open page is not thrown out while an option changes, and
   goes in `async_remove_entry` with the last console.
-- One WebSocket command, `network_plus/overview` (admin only: addresses and
-  remote client names): the consoles, and for the one asked for (else the
-  first) the state now and the history, and the integration's version from
-  `manifest.json` for the line at the bottom of the page. The page asks every
+- Two WebSocket commands, admin only (addresses and remote client names):
+  `network_plus/overview`, the consoles, and for the one asked for (else the
+  first) the state now and the history; `network_plus/about`, the
+  integration's version from `manifest.json` for the line at the bottom of
+  the page, apart from the overview so the line stays when the overview
+  fails (no commit: there is no `scripts/deploy.sh` writing `BUILD`). The page asks every
   30 s while it is open and visible; a push channel would add code for a page
   that shows minutes-old history. Only the answer to the latest request
   counts, so a console chosen while a request runs is not switched back.
@@ -216,27 +218,31 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   were kept go to the one client of their type and name. Saved 10 s after a change and
   on unload; entries older than the option *Keep history* (365 days) go,
   drills and open sessions stay.
-- The page is plain JavaScript without a build step, one file, built from
-  Home Assistant's own elements (`ha-card`, `ha-alert`, `ha-icon-button`),
-  which the frontend has loaded already, with the toolbar and tabs of the
-  settings pages; colours come from the theme. The toolbar starts with the
-  integration's icon: `brand/icon.png` (and `icon@2x.png`) of the
-  integration itself, served by Home Assistant's brands API
-  (`/api/brands/integration/network_plus/icon.png`, `dark_icon.png` in a
-  dark theme, which falls back to the light one). An `<img>` sends no
-  login, so the page asks for the brands access token
-  (`brands/access_token`, the same request the frontend makes), puts it
-  into the URL and asks again after 20 minutes or when the image fails to
-  load (Home Assistant changes it every 30 minutes and accepts the last
-  two). The name follows, then the tabs in the same row; on a narrow
-  screen the tabs go to a bar at the bottom. The toolbar ends with the
-  header all of these integrations and apps share (STANDARD.md §7 of the
-  repository template): the time of the last answer, refresh (the same
-  WebSocket request again, no page reload) and settings (Home Assistant's
-  page of the integration, opened by in-app navigation). The console
-  choice is part of the page, so it sits above the cards. Its URL carries a hash of
-  the file, so a browser fetches every changed page. It holds no version of
-  its own.
+- The page is plain JavaScript without a build step, one file, built as
+  STANDARD.md §7 of the repository template describes it, from Home
+  Assistant's own elements, which the frontend has loaded already; colours
+  come from the theme. The frame is `hass-tabs-subpage` with three areas as
+  its tabs (in the header on a wide screen, at the bottom on a narrow one):
+  Uplinks (`/network-plus/uplinks/status`, `/uplinks/history`), Tests
+  (`/tests/speedtests`, `/tests/drills`) and Remote (`/remote/now`,
+  `/remote/sessions`); the pages of an area are an `ha-tab-group` below the
+  header. The addresses of before go to their new place by
+  `history.replaceState` (`/events`, `/speedtests`, `/drills`; `/uplinks`
+  and `/remote` are areas and open their first page). The chosen console is
+  in the address (`?console=<entry_id>`), chosen with `ha-select`, and stays
+  when another area is opened; a change of the query alone (back, a link) is
+  read on `location-changed` and `popstate`, since Home Assistant passes a new
+  route only when the path changes. A console the address names that is not
+  there reads as one error line, not another console in its place. The
+  header ends with the stamp, refresh (the same WebSocket request again, no
+  page reload) and the button to Home Assistant's page of the integration
+  (in-app navigation). Explanations sit behind an (i) (`ha-icon-button` with
+  `ha-tooltip`), states and errors are one line (`ha-alert`), numbers follow
+  the number format of the user's profile, states shown by colour also have
+  a word (badges, the kinds in the history, the LTE bar, the chart). The page
+  has no settings, so no setup area: the version line is at the bottom of
+  every page. Its URL carries a hash of the file, so a browser fetches every
+  changed page. It holds no version of its own.
 
 ## The admin opt-in, the switch "Enforce backup uplink" and the speed test buttons
 

@@ -1,7 +1,8 @@
-"""The WebSocket command of the page: the consoles, their uplinks now and their history.
+"""The WebSocket commands of the page: the consoles, their uplinks now and their history.
 
 For administrators only: the page shows public addresses and the names of
-remote clients.
+remote clients. The version for the line at the bottom of the page has a
+command of its own, so the line stays when the overview fails.
 """
 
 from __future__ import annotations
@@ -32,6 +33,19 @@ async def async_register_websocket(hass: HomeAssistant) -> None:
     """Register the command."""
     hass.data[DATA_VERSION] = str((await async_get_integration(hass, DOMAIN)).version)
     async_register_command(hass, websocket_overview)
+    async_register_command(hass, websocket_about)
+
+
+@require_admin
+@websocket_command({probatio.Required("type"): "network_plus/about"})
+@callback
+def websocket_about(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+    """Return the version of the integration as manifest.json has it.
+
+    No commit: only a test installation would know it (scripts/deploy.sh writes
+    BUILD), and this repository has no such script.
+    """
+    connection.send_result(msg["id"], {"version": hass.data.get(DATA_VERSION)})
 
 
 @require_admin
@@ -74,10 +88,7 @@ def websocket_overview(
             "backup_enforced": runtime.coordinator.backup_enforced,
             "history": runtime.history.as_dict(),
         }
-    connection.send_result(
-        msg["id"],
-        {"consoles": consoles, "console": console, "version": hass.data.get(DATA_VERSION)},
-    )
+    connection.send_result(msg["id"], {"consoles": consoles, "console": console})
 
 
 def state_dict(entry: NetworkConfigEntry, state: NetworkState) -> dict[str, Any]:

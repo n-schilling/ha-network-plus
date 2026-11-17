@@ -85,11 +85,10 @@ async def test_overview_unknown_unloaded_and_none(
     await hass.config_entries.async_remove(setup_entry.entry_id)
     await hass.async_block_till_done()
     await client.send_json_auto_id({"type": "network_plus/overview"})
-    assert (await client.receive_json())["result"] == {
-        "consoles": [],
-        "console": None,
-        "version": _version(),
-    }
+    assert (await client.receive_json())["result"] == {"consoles": [], "console": None}
+    # The version has its own command, so the page keeps its last line on an error
+    await client.send_json_auto_id({"type": "network_plus/about"})
+    assert (await client.receive_json())["result"] == {"version": _version()}
 
 
 async def test_overview_without_clients_and_lte_limit(
@@ -119,8 +118,9 @@ async def test_overview_is_for_admins(
 ) -> None:
     """Other users get nothing: the page names addresses and remote clients."""
     client = await hass_ws_client(hass, hass_read_only_access_token)
-    await client.send_json_auto_id({"type": "network_plus/overview"})
-    assert (await client.receive_json())["error"]["code"] == "unauthorized"
+    for command in ("network_plus/overview", "network_plus/about"):
+        await client.send_json_auto_id({"type": command})
+        assert (await client.receive_json())["error"]["code"] == "unauthorized"
 
 
 async def test_panel_stays_through_a_reload_and_goes_with_the_last_console(
@@ -163,8 +163,31 @@ def test_panel_script() -> None:
     """The script defines the element and asks the command; the version comes from there."""
     code = PANEL.read_text(encoding="utf-8")
     assert 'customElements.define("network-plus-panel"' in code
-    assert '"network_plus/overview"' in code
+    assert "`${DOMAIN}/overview`" in code and "`${DOMAIN}/about`" in code
+    assert 'const DOMAIN = "network_plus"' in code
     # manifest.json is the one place of the version
     assert re.search(r"\d+\.\d+\.\d+", code.replace("@mdi/js", "")) is None
     # Everything comes from Home Assistant: no requests of its own
     assert "fetch(" not in code and "http" not in code.replace("https://github.com", "")
+
+
+def _language_keys(code: str, language: str) -> list[str]:
+    """The keys of one language of the texts, in order, each as often as it is written."""
+    start = code.index(f"\n    {language}: {{\n")
+    end = code.index("\n    },", start)
+    return re.findall(r'(?:^|", |\{ )\s*([A-Za-z_][A-Za-z0-9_]*): "', code[start:end], re.MULTILINE)
+
+
+def test_texts_have_each_key_once_in_both_languages() -> None:
+    """A key written twice silently takes the later text; both languages have the same keys."""
+    code = PANEL.read_text(encoding="utf-8")
+    english = _language_keys(code, "en")
+    german = _language_keys(code, "de")
+    assert len(english) > 100
+    for keys in (english, german):
+        twice = sorted({k for k in keys if keys.count(k) > 1})
+        assert not twice, twice
+    assert set(english) == set(german)
+    # Every text the page asks for is there
+    asked = set(re.findall(r'_t\("([A-Za-z_]+)"', code))
+    assert asked <= set(english), sorted(asked - set(english))
