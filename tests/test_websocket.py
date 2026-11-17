@@ -142,6 +142,7 @@ async def test_panel_stays_through_a_reload_and_goes_with_the_last_console(
     panel = hass.data[DATA_PANELS][PANEL_URL_PATH]
     assert panel.require_admin is True
     assert panel.config["_panel_custom"]["name"] == "network-plus-panel"
+    assert panel.config["_panel_custom"]["handle_safe_area"] is True
     digest = hashlib.sha256(PANEL.read_bytes()).hexdigest()[:12]
     assert panel.config["_panel_custom"]["module_url"].endswith(f"?v={digest}")
     await hass.config_entries.async_reload(first.entry_id)

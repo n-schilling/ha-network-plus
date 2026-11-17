@@ -4,6 +4,12 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-17
+
+### Fixed
+
+- On a phone with a notch or rounded corners (iPhone) the page's header was too high and the bar at the bottom ran off the screen.
+
 ## [0.12.0] - 2026-11-17
 
 ### Changed

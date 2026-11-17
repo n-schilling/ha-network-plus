@@ -60,6 +60,39 @@ TIME_ZONE = ZoneInfo("Europe/Berlin")
 ADMIN = ("admin", "panel-check-admin")
 USER = ("user", "panel-check-user")
 PANEL = "network-plus-panel"
+# An iPhone's safe area (47 px above, 34 px below), as Home Assistant's debug setting sets it
+SAFE_AREA = """() => {
+  const style = document.createElement('style');
+  style.textContent =
+    ':root{--app-safe-area-inset-top:47px !important;--app-safe-area-inset-bottom:34px !important;}';
+  document.head.append(style);
+}"""
+# Top and bottom of Home Assistant's frame for pages with tabs, the height of its header and
+# top and bottom of its bar at the bottom, in the viewport
+SAFE_AREA_MEASURE = """() => {
+  const find = (root) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.localName === 'hass-tabs-subpage') return el;
+      const inner = el.shadowRoot && find(el.shadowRoot);
+      if (inner) return inner;
+    }
+    return null;
+  };
+  const frame = find(document);
+  if (!frame) return 'no hass-tabs-subpage';
+  const box = (el) => {
+    if (!el) return null;
+    const b = el.getBoundingClientRect();
+    return [Math.round(b.top), Math.round(b.bottom)];
+  };
+  const toolbar = frame.shadowRoot.querySelector('.toolbar');
+  return {
+    viewport: innerHeight,
+    frame: box(frame),
+    toolbar: toolbar ? Math.round(toolbar.getBoundingClientRect().height) : null,
+    tabbar: box(frame.shadowRoot.querySelector('#tabbar.bottom-bar')),
+  };
+}"""
 
 
 def _free_port() -> int:
@@ -1141,6 +1174,47 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
     await checks.run(
         "phone width and dark mode: areas at the bottom, no sideways scrolling, buttons fit",
         phone_and_dark,
+    )
+
+    async def iphone_safe_area() -> None:
+        # An iPhone's safe area, set the way Home Assistant's own debug setting sets it; the frame
+        # pads itself, so it fills the screen like Home Assistant's own pages
+        phone = await _open(
+            browser,
+            instance,
+            ADMIN,
+            viewport={"width": 390, "height": 844},
+            color_scheme="dark",
+        )
+        measured = {}
+        for name, path in (
+            ("Network Plus", "/network-plus/uplinks/status"),
+            ("Automations", "/config/automation/dashboard"),
+        ):
+            await phone.goto(f"{instance.base}{path}")
+            await phone.wait_for_load_state("networkidle")
+            await phone.locator("#ha-launch-screen").wait_for(state="detached")
+            await phone.evaluate(SAFE_AREA)
+            await phone.wait_for_timeout(800)
+            measured[name] = box = await phone.evaluate(SAFE_AREA_MEASURE)
+            expect(isinstance(box, dict), f"{name}: {box}")
+            height = box["viewport"]
+            expect(box["frame"] == [0, height], f"{name}: frame {box['frame']} in {height}")
+            expect(box["toolbar"] == 56 + 47, f"{name}: header {box['toolbar']} high")
+            expect(
+                box["tabbar"] is not None and box["tabbar"][1] == height,
+                f"{name}: bar at the bottom {box['tabbar']} in {height}",
+            )
+            expect(box["tabbar"][0] >= 0, f"{name}: bar at the bottom {box['tabbar']}")
+        print(f"     measured: {measured}")
+        expect(
+            measured["Network Plus"] == measured["Automations"],
+            f"unlike Home Assistant's page: {measured}",
+        )
+        await phone.context.close()
+
+    await checks.run(
+        "iPhone safe area: header and bottom bar as on Home Assistant's own pages", iphone_safe_area
     )
 
     async def admin_only() -> None:
