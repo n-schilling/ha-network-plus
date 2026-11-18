@@ -51,7 +51,7 @@ flowchart LR
         history[("History store<br/>per console")]
         page["Page<br/>administrators only"]
     end
-    api -->|"devices, uplinks, clients"| client
+    api -->|"devices, uplinks, networks, clients"| client
     wss --> client
     client --> coordinator
     coordinator --> history
@@ -79,6 +79,18 @@ A port that negotiated 1000 Mbit/s on a 2.5G line is a bad cable or a bad port, 
 Only uplinks the gateway monitors get entities; a configured but unused WAN port has none. An uplink is reported offline only when the gateway says so. If the console cannot be reached, the entities become unavailable instead.
 
 `brief_failover` fires when the gateway switched to the backup and back between two states the integration saw, for example while Home Assistant restarted.
+
+### Internet per network
+
+UniFi Network assigns local networks to a cellular backup one by one (LTE, 5G: the setting per network that it may use the backup). A network that is not assigned has no internet while the backup carries the traffic, and its clients only notice that something is wrong. Every local network (LAN, VLAN, guest network; not a VLAN-only network, which has no gateway interface) gets a connectivity sensor **"<network> Internet"** that says whether it reaches the internet now:
+
+- A wired uplink carries every network, so with two wired uplinks and no cellular backup the second one keeps every network online. UniFi Network has no assignment per network for a wired uplink.
+- A cellular backup carries only the networks assigned to it.
+- A traffic route with kill switch that takes all internet traffic of a network (or of all clients) binds it to the route's target: the network has internet while that uplink is online, whatever uplink is active. Routes for single clients, domains, addresses or regions leave the rest of the network's traffic alone and do not count. Whether a VPN client as target is up is not known, so the sensor is unknown then.
+- A network with internet access turned off is always off; with every uplink down every network is off.
+- The sensor is unknown while that cannot be told: the active uplink is unknown, the console does not say whether a network may use the backup, or the traffic routes could not be read yet.
+
+The attribute `uplinks` lists the uplinks that would carry the network. The networks and the traffic routes are read with every poll; a failed read keeps the last configuration, a console without traffic routes has none. The page shows every network against every uplink, with the clients connected in it now.
 
 ### Speed test
 
@@ -108,7 +120,7 @@ If the console has an LTE backup device, it gets a device of its own below the g
 
 **Network Plus** in the sidebar, for administrators. It shows one console at a time (a choice above the cards when there are several; the chosen one is in the address, `?console=…`) and reads it again every 30 seconds while it is open. The page is Home Assistant's own frame with three areas as tabs, each with two pages below the header; at the end of the header the time the page last got its data ("As of 14:02:37", hidden on a phone), **Refresh** (reads the data again at once) and **Integration in Home Assistant** (Home Assistant's page of the integration):
 
-- **Uplinks › Status** (`/network-plus/uplinks/status`): the active uplink, latency, last switch, last speed test and last drill; per uplink its state, the gateway's latency and availability, the negotiated link speed against the expected one, port, connection type and public addresses; the LTE backup with data used against the plan and the signal.
+- **Uplinks › Status** (`/network-plus/uplinks/status`): the active uplink, latency, last switch, last speed test and last drill; every local network, whether it reaches the internet now and over which uplinks, with its clients; per uplink its state, the gateway's latency and availability, the negotiated link speed against the expected one, port, connection type and public addresses; the LTE backup with data used against the plan and the signal.
 - **Uplinks › History** (`/uplinks/history`): failovers and returns with how long the backup carried the traffic, brief failovers, uplinks going down and up with how long they were gone, new public addresses (the uplink and the family, not the address).
 - **Tests › Speed tests** (`/tests/speedtests`): download over time per uplink, and every result with upload and ping.
 - **Tests › Drills** (`/tests/drills`): every backup drill with failover time, return time and LTE data, and the averages.
@@ -432,6 +444,7 @@ With admin features, the switch and the buttons ask before they act:
 - The only writes are the switch "Enforce backup uplink" and the two speed test buttons, and only with the admin opt-in. A speed test runs over the active uplink; the console offers no way to pick one, which is why the backup is measured by switching the preferred uplink off.
 - Remote clients are those the console lists as connected; of VPN servers only Teleport was tested.
 - Events are derived from state changes, not from the console's event log; packet loss and "failed multiple times" are not reported.
+- "<network> Internet" follows the console's configuration, it does not test the network. Tested against a console with one wired uplink and an LTE backup; two wired uplinks, a 5G backup and traffic routes with kill switch follow the configuration as UniFi Network documents it, not a test.
 
 ## Troubleshooting
 
@@ -457,6 +470,7 @@ Of the gateway:
 | Sensor "Active uplink" | `wan`, `wan2`, `wan_lte_failover`, …; the attribute `uplink_name` holds the name set in UniFi Network |
 | Sensor "Internet latency" | Latency on the uplink that carries the traffic, one series across failovers |
 | Event "Internet" | `failover`, `restored`, `brief_failover`, `uplink_down`, `uplink_up`, `public_ip_changed`, `drill_completed` |
+| Binary sensor "<network> Internet", per local network | On while the network reaches the internet over the uplink that carries it now, see [Internet per network](#internet-per-network); attribute `uplinks` |
 | Binary sensor "<uplink> link slower than expected" | Only with an expected link speed in the options: on while the port negotiated less than that, or half duplex. A link that is down is not slow; the sensor is unknown then |
 
 With the admin opt-in, for administrators and automations only:

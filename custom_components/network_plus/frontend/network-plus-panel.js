@@ -85,6 +85,9 @@ if (!customElements.get("network-plus-panel")) {
       noRemote: "No remote client is connected.", remoteUnknown: "The console does not tell its remote clients.",
       name: "Name", kind: "Kind", from: "From", until: "Until", duration: "Duration",
       noSessions: "No finished session in the kept period.",
+      networks: "Networks", network: "Network", internet: "Internet now", clients: "Clients",
+      carries: "carries it", notCarries: "does not carry it",
+      networksHelp: "Whether each local network reaches the internet, now and over each uplink. A wired uplink carries every network; a cellular backup only the networks assigned to it in UniFi Network. A traffic route with kill switch binds a network to its target uplink. Clients: connected now.",
     },
     de: {
       title: "Network Plus", tabUplinks: "Leitungen", tabTests: "Tests", tabRemote: "Fernzugriff", subStatus: "Status",
@@ -118,6 +121,9 @@ if (!customElements.get("network-plus-panel")) {
       noRemote: "Kein Fernzugriff verbunden.", remoteUnknown: "Die Konsole meldet ihre Fernzugriffe nicht.",
       name: "Name", kind: "Art", from: "Von", until: "Bis", duration: "Dauer",
       noSessions: "Keine beendete Sitzung im aufbewahrten Zeitraum.",
+      networks: "Netze", network: "Netz", internet: "Internet jetzt", clients: "Clients",
+      carries: "versorgt es", notCarries: "versorgt es nicht",
+      networksHelp: "Ob jedes lokale Netz ins Internet kommt, jetzt und über jede Leitung. Eine Kabel-Leitung versorgt alle Netze, eine Mobilfunk-Reserve nur die Netze, die ihr in UniFi Network zugewiesen sind. Eine Traffic Route mit Kill Switch bindet ein Netz an ihre Ziel-Leitung. Clients: gerade verbunden.",
     },
   };
 
@@ -541,6 +547,7 @@ if (!customElements.get("network-plus-panel")) {
       ]);
       const model = [c.gateway.model, c.gateway.version].filter(Boolean).join(" · ");
       let html = this._card(`<span>${esc(c.title)}</span> <span class="muted head-note">${esc(model)}</span>`, summary);
+      html += this._networks(c);
       html += `<div class="grid">`;
       for (const u of c.uplinks) {
         const badges = [
@@ -582,6 +589,22 @@ if (!customElements.get("network-plus-panel")) {
         ]));
       }
       return html + `</div>`;
+    }
+
+    // Uplinks › Status: every local network, whether it reaches the internet now and over which uplink
+    _networks(c) {
+      if (!c.networks?.length) return "";
+      // Each state with its own shape, word and colour; a cell's word is its label
+      const mark = (value, yes, no) => {
+        const [kind, word] = value === true ? ["ok", yes] : value === false ? ["err", no] : ["unknown", this._t("unknown")];
+        return `<ha-svg-icon class="kind" style="color:${STATE_COLOR[kind]}" path="${MDI[kind]}" role="img" aria-label="${esc(word)}" title="${esc(word)}"></ha-svg-icon>`;
+      };
+      const head = `<tr><th>${esc(this._t("network"))}</th><th>${esc(this._t("internet"))}</th>` +
+        c.uplinks.map((u) => `<th>${esc(u.name)}</th>`).join("") + `<th class="n">${esc(this._t("clients"))}</th></tr>`;
+      const rows = c.networks.map((n) => `<tr><td>${esc(n.name)}</td><td>${this._online(n.internet)}</td>` +
+        c.uplinks.map((u) => `<td>${mark(n.uplinks[u.key], `${u.name}: ${this._t("carries")}`, `${u.name}: ${this._t("notCarries")}`)}</td>`).join("") +
+        `<td class="n">${Number.isFinite(n.clients) ? this._num(n.clients) : "–"}</td></tr>`).join("");
+      return this._card(esc(this._t("networks")), `<div class="scroll"><table class="data">${head}${rows}</table></div>`, this._t("networksHelp"));
     }
 
     _speeds(s) {

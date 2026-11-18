@@ -53,6 +53,10 @@ class NetworkServerError(NetworkError):
     """The console answered with a server error (5xx), for example while an application restarts."""
 
 
+class NetworkNotFoundError(NetworkError):
+    """The console does not know the address (HTTP 404), for example an endpoint of another version."""
+
+
 class NetworkAuthError(NetworkError):
     """The console rejected the user name or password."""
 
@@ -244,6 +248,25 @@ class NetworkClient:
             raise NetworkError("wan/enriched-configuration: unexpected answer")
         configs = (w.get("configuration") for w in body if isinstance(w, dict))
         return [c for c in configs if isinstance(c, dict)]
+
+    async def get_networks(self) -> list[dict[str, Any]]:
+        """Return the configured networks: local ones, uplinks and VPNs.
+
+        The objects of uplinks and VPNs hold secrets; the model takes over
+        only named fields of the local networks.
+        """
+        body = await self._get(f"/proxy/network/api/s/{self._site}/rest/networkconf")
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, list):
+            raise NetworkError("networkconf: unexpected answer")
+        return [n for n in data if isinstance(n, dict)]
+
+    async def get_traffic_routes(self) -> list[dict[str, Any]]:
+        """Return the traffic routes (policy-based routing)."""
+        body = await self._get(f"/proxy/network/v2/api/site/{self._site}/trafficroutes")
+        if not isinstance(body, list):
+            raise NetworkError("trafficroutes: unexpected answer")
+        return [r for r in body if isinstance(r, dict)]
 
     async def get_active_clients(self) -> list[dict[str, Any]]:
         """Return the active clients, Teleport and VPN clients included."""
@@ -444,6 +467,8 @@ def _check_accepted(answer: Any, what: str) -> None:
 def _raise_for_status(resp: ClientResponse) -> None:
     if resp.status >= 500:
         raise NetworkServerError(f"{resp.url.path}: HTTP {resp.status}")
+    if resp.status == 404:
+        raise NetworkNotFoundError(f"{resp.url.path}: HTTP 404")
     if resp.status >= 400:
         raise NetworkError(f"{resp.url.path}: HTTP {resp.status}")
 

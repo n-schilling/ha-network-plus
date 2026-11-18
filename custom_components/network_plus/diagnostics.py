@@ -105,6 +105,21 @@ async def async_get_config_entry_diagnostics(
             for lte in (data.lte or {}).values()
         ],
         "vpn_clients": len(data.vpn_clients) if data.vpn_clients is not None else None,
+        # Without names: what each local network reaches, in order of the names
+        "networks": None
+        if data.networks is None
+        else [
+            {
+                "internet_access": network.internet_access,
+                "cellular_backup": network.cellular_backup,
+                "internet": data.network_internet(network),
+                "uplinks": {
+                    key: data.uplink_serves(network, uplink) for key, uplink in data.uplinks.items()
+                },
+            }
+            for network in data.networks.values()
+        ],
+        "pinned_routes": len(data.routes) if data.routes is not None else None,
         "drill": {
             "completed": drill.completed,
             "failover_seconds": drill.failover_seconds,

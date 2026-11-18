@@ -20,7 +20,12 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.network_plus import create_client
-from custom_components.network_plus.api import NetworkAuthError, NetworkError, NetworkServerError
+from custom_components.network_plus.api import (
+    NetworkAuthError,
+    NetworkError,
+    NetworkNotFoundError,
+    NetworkServerError,
+)
 from custom_components.network_plus.const import (
     CONF_LTE_BILLING_DAY,
     CONF_SPEEDTEST_UPLINK,
@@ -38,6 +43,7 @@ from .conftest import (
     TRANSITION,
     FakeConsole,
     gateway,
+    kill_switch_route,
     lte_device,
     lte_report_row,
     sync,
@@ -52,6 +58,8 @@ LATENCY = "sensor.gateway_internet_latency"
 LTE_PERCENT = "sensor.lte_backup_lte_data_used"
 LTE_USAGE = "sensor.lte_backup_lte_data_this_month"
 LTE_LIMIT = "sensor.lte_backup_lte_data_limit"
+LAN_INTERNET = "binary_sensor.gateway_default_internet"
+GUEST_INTERNET = "binary_sensor.gateway_guest_internet"
 
 
 def _state(hass: HomeAssistant, entity_id: str) -> str:
@@ -1033,3 +1041,108 @@ async def test_lte_billing_without_console_time_zone(
     console.timezone = None
     await _setup_billing(hass, console, config_entry, freezer)
     assert _state(hass, LTE_USAGE) == "0.3"
+
+
+async def test_network_internet_sensors(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """Each local network gets a sensor; over the backup only the assigned ones stay on."""
+    assert _state(hass, LAN_INTERNET) == "on"
+    assert _state(hass, GUEST_INTERNET) == "on"
+    guest = hass.states.get(GUEST_INTERNET)
+    assert guest.attributes["device_class"] == "connectivity"  # type: ignore[union-attr]
+    assert guest.attributes["uplinks"] == ["WAN"]  # type: ignore[union-attr]
+    assert hass.states.get(LAN_INTERNET).attributes["uplinks"] == [  # type: ignore[union-attr]
+        "WAN",
+        "WAN_LTE_FAILOVER",
+    ]
+    # No sensor for a VLAN without gateway, a disabled network, an uplink or a VPN
+    registry = er.async_get(hass)
+    internet = [
+        e.unique_id
+        for e in er.async_entries_for_config_entry(registry, setup_entry.entry_id)
+        if "_network_internet_" in e.unique_id
+    ]
+    assert sorted(internet) == [
+        f"{MAC}_network_internet_net-guest",
+        f"{MAC}_network_internet_net-lan",
+    ]
+    await console.push(
+        hass,
+        sync(gateway(wan="offline", active="WAN_LTE_FAILOVER", transition=TRANSITION + 1000)),
+    )
+    assert _state(hass, LAN_INTERNET) == "on"
+    assert _state(hass, GUEST_INTERNET) == "off"
+
+
+async def test_network_internet_with_kill_switch_route(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A network bound to the cable by a kill switch loses the internet with the cable."""
+    console.networks[1]["lte_lan_enabled"] = True
+    console.routes = [kill_switch_route(target="net-wan", network="net-guest")]
+    await _poll(hass, setup_entry)
+    assert hass.states.get(GUEST_INTERNET).attributes["uplinks"] == ["WAN"]  # type: ignore[union-attr]
+    console.set_gateway(gateway(wan="offline", active="WAN_LTE_FAILOVER"))
+    await _poll(hass, setup_entry)
+    assert _state(hass, GUEST_INTERNET) == "off"
+    assert _state(hass, LAN_INTERNET) == "on"
+
+
+async def test_networks_and_routes_not_readable(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A failed read keeps the last configuration; a console without routes has none."""
+    console.networks_error = NetworkError("busy")
+    console.routes_error = NetworkServerError("busy")
+    await _poll(hass, setup_entry)
+    assert _state(hass, GUEST_INTERNET) == "on"
+    console.routes_error = NetworkNotFoundError("HTTP 404")
+    await _poll(hass, setup_entry)
+    assert setup_entry.runtime_data.coordinator.data.routes == ()
+    # A rejected login fails the poll, as for the uplinks
+    console.networks_error = NetworkAuthError("rejected")
+    await _poll(hass, setup_entry)
+    assert _state(hass, GUEST_INTERNET) == STATE_UNAVAILABLE
+    console.networks_error = RuntimeError("boom")
+    await _poll(hass, setup_entry)
+    assert setup_entry.runtime_data.coordinator.last_update_success is False
+
+
+async def test_networks_unknown_since_setup(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """Unread routes leave the networks unknown; unread networks give no sensors yet."""
+    console.routes_error = NetworkError("busy")
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert _state(hass, GUEST_INTERNET) == STATE_UNKNOWN
+    assert hass.states.get(GUEST_INTERNET).attributes["uplinks"] == []  # type: ignore[union-attr]
+    console.routes_error = None
+    await _poll(hass, config_entry)
+    assert _state(hass, GUEST_INTERNET) == "on"
+
+
+async def test_network_appears_disappears_and_is_renamed(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """A new network gets its sensor, a removed one is unavailable, a rename renews the name."""
+    console.networks.append(
+        {"_id": "net-iot", "name": "IoT", "purpose": "corporate", "lte_lan_enabled": True}
+    )
+    await _poll(hass, setup_entry)
+    assert _state(hass, "binary_sensor.gateway_iot_internet") == "on"
+    removed = console.networks.pop()
+    await _poll(hass, setup_entry)
+    assert _state(hass, "binary_sensor.gateway_iot_internet") == STATE_UNAVAILABLE
+    console.networks.append(removed)
+    await _poll(hass, setup_entry)
+    coordinator = setup_entry.runtime_data.coordinator
+    console.networks[1]["name"] = "Visitors"
+    await _poll(hass, setup_entry)
+    assert setup_entry.runtime_data.coordinator is not coordinator
+    assert (
+        hass.states.get(GUEST_INTERNET).attributes["friendly_name"]  # type: ignore[union-attr]
+        == "Gateway Visitors Internet"
+    )

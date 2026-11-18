@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -32,6 +33,8 @@ from custom_components.network_plus.model import (
     parse_clients,
     parse_lte,
     parse_lte_reports,
+    parse_networks,
+    parse_routes,
     parse_state,
     period_usage,
 )
@@ -44,7 +47,9 @@ from .conftest import (
     SPEEDTEST_RUN,
     TRANSITION,
     gateway,
+    kill_switch_route,
     lte_device,
+    networks,
     teleport_client,
     wan_configs,
 )
@@ -789,3 +794,159 @@ def test_apply_billing() -> None:
 def test_highest_percent_without_a_limit() -> None:
     """Without a data plan limit there is no share at all."""
     assert parse_lte(lte_device(limit=False)).highest_percent is None
+
+
+LOCAL = [
+    {"type": "WIRED", "network_id": "net-lan"},
+    {"type": "WIRELESS", "network_id": "net-lan"},
+    {"type": "WIRELESS", "network_id": "net-guest"},
+    teleport_client(),
+    "junk",
+]
+
+
+def _two_wans(wan: str = "offline", wan2: str = "online", active: str = "WAN2") -> dict[str, Any]:
+    """Return a gateway with two wired uplinks and no cellular backup."""
+    raw = gateway(wan=wan, active=active)
+    raw["last_wan_status"] = {"WAN": wan, "WAN2": wan2}
+    raw["wan2"] = {"ifname": "eth9", "speed": 1000, "full_duplex": True, "up": wan2 == "online"}
+    return raw
+
+
+def _networked(raw: dict[str, Any], routes: list[Any] | None = None, **kwargs: Any) -> Any:
+    return parse_state(
+        raw, wan_configs(), None, LOCAL, networks(), [] if routes is None else routes, **kwargs
+    )
+
+
+def test_parse_networks() -> None:
+    """Only enabled local networks count; secrets of uplinks and VPNs stay behind."""
+    found = parse_networks([*networks(), "junk", {"purpose": "guest"}], LOCAL)
+    assert list(found) == ["net-lan", "net-guest"]  # by name: Default, Guest
+    lan, guest = found.values()
+    assert (lan.name, lan.internet_access, lan.cellular_backup, lan.clients) == (
+        "Default",
+        True,
+        True,
+        2,
+    )
+    assert (guest.cellular_backup, guest.clients) == (False, 1)
+    assert "secret" not in repr(found)
+
+
+def test_parse_networks_details() -> None:
+    """A missing flag is unknown, internet access off counts, clients without a network are not counted."""
+    raw = [
+        {"_id": "a", "purpose": "corporate", "internet_access_enabled": False},
+        {"_id": "b", "name": "B", "purpose": "corporate", "lte_lan_enabled": "yes"},
+    ]
+    found = parse_networks(raw, [{"type": "WIRED"}])
+    assert found["a"].name == "a"
+    assert found["a"].internet_access is False
+    assert found["b"].cellular_backup is None
+    assert found["a"].clients is None
+    assert parse_networks(raw, None)["a"].clients is None
+    # No local client at all: every network has none
+    assert parse_networks(raw, [teleport_client()])["a"].clients == 0
+
+
+def test_parse_routes() -> None:
+    """Only enabled routes with kill switch for all internet traffic of networks or all clients bind."""
+    route = kill_switch_route()
+    routes = parse_routes(
+        [
+            route,
+            kill_switch_route(target="net-vpn", network=None),
+            {**route, "enabled": False},
+            {**route, "kill_switch_enabled": False},
+            {**route, "matching_target": "DOMAIN"},
+            {**route, "network_id": None},
+            {**route, "target_devices": None},
+            {**route, "target_devices": [{"type": "CLIENT", "client_mac": "02:00:00:00:00:09"}]},
+            {**route, "target_devices": [{"type": "NETWORK"}, "junk"]},
+            "junk",
+        ]
+    )
+    assert [(r.target, r.networks) for r in routes] == [
+        ("net-wan", frozenset({"net-guest"})),
+        ("net-vpn", None),
+    ]
+
+
+def test_network_internet_on_the_preferred_uplink() -> None:
+    """A wired uplink carries every network; the cellular backup only the assigned ones."""
+    state = _networked(gateway())
+    lan, guest = state.networks.values()
+    assert state.network_internet(lan) is True
+    assert state.network_internet(guest) is True
+    wan, lte = state.uplinks.values()
+    assert state.uplink_serves(guest, wan) is True
+    assert state.uplink_serves(guest, lte) is False
+    assert state.uplink_serves(lan, lte) is True
+
+
+def test_network_internet_on_the_cellular_backup() -> None:
+    """Over the cellular backup a network not assigned to it has no internet."""
+    state = _networked(gateway(wan="offline", active="WAN_LTE_FAILOVER"))
+    lan, guest = state.networks.values()
+    assert state.network_internet(lan) is True
+    assert state.network_internet(guest) is False
+    unknown = replace(lan, cellular_backup=None)
+    assert state.network_internet(unknown) is None
+
+
+def test_network_internet_on_a_second_wired_uplink() -> None:
+    """Two wired uplinks, no cellular backup: the second one carries every network."""
+    state = _networked(_two_wans())
+    assert state.active == "WAN2"
+    for network in state.networks.values():
+        assert state.network_internet(network) is True
+
+
+def test_network_internet_without_uplink() -> None:
+    """Every uplink down: no network has internet; an unknown uplink leaves it unknown."""
+    down = _networked(_two_wans(wan2="offline", active="eth9"))
+    assert down.active is None
+    assert [down.network_internet(n) for n in down.networks.values()] == [False, False]
+    unknown = _networked(_two_wans(wan="degraded", wan2="offline", active="eth9"))
+    assert [unknown.network_internet(n) for n in unknown.networks.values()] == [None, None]
+
+
+def test_network_without_internet_access() -> None:
+    """A network without internet access never reaches it, over no uplink."""
+    state = _networked(gateway())
+    lan = replace(next(iter(state.networks.values())), internet_access=False)
+    assert state.network_internet(lan) is False
+    assert state.uplink_serves(lan, state.uplinks["WAN"]) is False
+
+
+def test_network_internet_without_known_routes() -> None:
+    """Unread traffic routes may bind a network anywhere: unknown."""
+    state = parse_state(gateway(), wan_configs(), None, LOCAL, networks(), None)
+    assert state.routes is None
+    lan = next(iter(state.networks.values()))
+    assert state.network_internet(lan) is None
+    assert state.uplink_serves(lan, state.uplinks["WAN"]) is None
+
+
+def test_kill_switch_route_binds_a_network() -> None:
+    """A network bound to a wired uplink by a kill switch has internet only while that uplink does."""
+    routes = [kill_switch_route(target="net-wan")]
+    up = _networked(gateway(), routes)
+    lan, guest = up.networks.values()
+    assert up.network_internet(guest) is True
+    assert up.uplink_serves(guest, up.uplinks["WAN_LTE_FAILOVER"]) is False
+    down = _networked(gateway(wan="offline", active="WAN_LTE_FAILOVER"), routes)
+    assert down.network_internet(guest) is False
+    assert down.network_internet(lan) is True
+    unknown = _networked(gateway(wan="degraded"), routes)
+    assert unknown.network_internet(guest) is None
+
+
+def test_kill_switch_route_to_a_vpn() -> None:
+    """A network bound to a VPN client: whether that VPN is up is not known here."""
+    state = _networked(gateway(), [kill_switch_route(target="net-vpn", network=None)])
+    lan, guest = state.networks.values()
+    assert state.network_internet(lan) is None
+    assert state.network_internet(guest) is None
+    assert state.uplink_serves(lan, state.uplinks["WAN"]) is False

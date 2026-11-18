@@ -27,6 +27,7 @@ from .api import (
     NetworkCertificateError,
     NetworkClient,
     NetworkError,
+    NetworkNotFoundError,
     NetworkPermissionError,
     NetworkServerError,
     NetworkWriteUnknownError,
@@ -154,6 +155,9 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         self._gateway_raw: dict[str, Any] = {}
         self._lte_raws: dict[str, dict[str, Any]] = {}
         self._clients: list[dict[str, Any]] | None = None
+        # The local networks and the traffic routes, as last read; None: not yet
+        self._networks: list[dict[str, Any]] | None = None
+        self._routes: list[dict[str, Any]] | None = None
         # Devices pushed since the poll started; the poll keeps their objects,
         # which are newer than its own snapshot
         self._pushed_macs: set[str] = set()
@@ -249,11 +253,13 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
 
     async def _async_fetch(self) -> NetworkState:
         self._pushed_macs.clear()
-        # The three requests are independent; exceptions come back as values
-        results: tuple[Any, Any, Any] = await asyncio.gather(
+        # The requests are independent; exceptions come back as values
+        results: tuple[Any, Any, Any, Any, Any] = await asyncio.gather(
             self.client.get_devices(),
             self.client.get_wan_configs(),
             self.client.get_active_clients(),
+            self.client.get_networks(),
+            self.client.get_traffic_routes(),
             return_exceptions=True,
         )
         for result in results[:2]:
@@ -275,6 +281,12 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             raise clients
         else:
             self._clients = clients
+        self._networks = self._optional(results[3], self._networks, "Networks")
+        routes = results[4]
+        if isinstance(routes, NetworkNotFoundError):
+            # A console without traffic routes has none
+            routes = []
+        self._routes = self._optional(routes, self._routes, "Traffic routes")
 
         gateway = find_gateway(devices, self.mac)
         if gateway is None:
@@ -299,6 +311,24 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             self.hass.config_entries.async_schedule_reload(self.config_entry.entry_id)
         self._notify(state)
         return state
+
+    def _optional(
+        self, result: Any, last: list[dict[str, Any]] | None, what: str
+    ) -> list[dict[str, Any]] | None:
+        """Return a configuration read alongside the poll, or the last one if it failed.
+
+        The uplinks do not depend on it: a failed read keeps what was read
+        before (the configuration rarely changes), only a rejected login
+        fails the poll.
+        """
+        if isinstance(result, NetworkAuthError):
+            raise self._poll_error(result)
+        if isinstance(result, NetworkError):
+            _LOGGER.debug("%s not readable: %s", what, result)
+            return last
+        if isinstance(result, BaseException):
+            raise result
+        return result  # type: ignore[no-any-return]
 
     @property
     def lte_billing_day(self) -> int:
@@ -718,7 +748,12 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
 
     def _build(self) -> NetworkState:
         state = parse_state(
-            self._gateway_raw, self._configs, list(self._lte_raws.values()), self._clients
+            self._gateway_raw,
+            self._configs,
+            list(self._lte_raws.values()),
+            self._clients,
+            self._networks,
+            self._routes,
         )
         state = apply_billing(state, self._lte_reports, self._console_now(), self.lte_billing_day)
         return self._place_speedtest(state)
@@ -1066,11 +1101,17 @@ def _speedtest_uplink_from(data: Any) -> tuple[datetime, str] | None:
 
 
 def _renamed(previous: NetworkState, state: NetworkState, configs: list[dict[str, Any]]) -> bool:
-    """Return whether an uplink carries another name than before.
+    """Return whether an uplink or a local network carries another name than before.
 
     Only names from the uplink configuration count: an uplink missing from an
     incomplete answer falls back to its key, and that is no rename.
     """
+    networks = previous.networks or {}
+    if any(
+        (known := networks.get(ident)) is not None and known.name != network.name
+        for ident, network in (state.networks or {}).items()
+    ):
+        return True
     configured = {c.get("wan_networkgroup") for c in configs}
     return any(
         key in configured

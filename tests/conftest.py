@@ -76,6 +76,66 @@ def wan_configs() -> list[dict[str, Any]]:
     ]
 
 
+def networks() -> list[dict[str, Any]]:
+    """The network configuration: two local networks, a VLAN without gateway, uplinks, a VPN.
+
+    The guest network is not assigned to the cellular backup. The uplink and
+    the VPN carry secrets as the console sends them.
+    """
+    return [
+        {
+            "_id": "net-lan",
+            "name": "Default",
+            "purpose": "corporate",
+            "enabled": True,
+            "internet_access_enabled": True,
+            "lte_lan_enabled": True,
+            "ip_subnet": "192.0.2.1/24",
+        },
+        {
+            "_id": "net-guest",
+            "name": "Guest",
+            "purpose": "guest",
+            "enabled": True,
+            "internet_access_enabled": True,
+            "lte_lan_enabled": False,
+        },
+        {"_id": "net-vlan", "name": "Cameras", "purpose": "vlan-only", "enabled": True},
+        {"_id": "net-off", "name": "Lab", "purpose": "corporate", "enabled": False},
+        {
+            "_id": "net-wan",
+            "name": "Cable",
+            "purpose": "wan",
+            "wan_networkgroup": "WAN",
+            "x_password": "pppoe-secret",
+        },
+        {
+            "_id": "net-vpn",
+            "name": "VPN",
+            "purpose": "vpn-client",
+            "x_wireguard_private_key": "vpn-secret",
+        },
+    ]
+
+
+def kill_switch_route(target: str = "net-wan", network: str | None = "net-guest") -> dict[str, Any]:
+    """Return an enabled traffic route with kill switch for all internet traffic of a network."""
+    devices = (
+        [{"type": "NETWORK", "network_id": network}]
+        if network is not None
+        else [{"type": "ALL_CLIENTS"}]
+    )
+    return {
+        "_id": "route-1",
+        "enabled": True,
+        "kill_switch_enabled": True,
+        "matching_target": "INTERNET",
+        "network_id": target,
+        "target_devices": devices,
+        "description": "Guest over cable only",
+    }
+
+
 def gateway(
     *,
     wan: str = "online",
@@ -244,10 +304,14 @@ class FakeConsole:
         ]
         self.configs = wan_configs()
         self.clients: list[dict[str, Any]] = [
-            {"type": "WIRED", "display_name": "Desk"},
-            {"type": "WIRELESS", "display_name": "Laptop"},
+            {"type": "WIRED", "display_name": "Desk", "network_id": "net-lan"},
+            {"type": "WIRELESS", "display_name": "Laptop", "network_id": "net-guest"},
             teleport_client(),
         ]
+        self.networks = networks()
+        self.routes: list[dict[str, Any]] = []
+        self.networks_error: Exception | None = None
+        self.routes_error: Exception | None = None
         self.error: Exception | None = None
         self.clients_error: Exception | None = None
         # Admin features: what the console answers about the user's rights and writes
@@ -297,6 +361,16 @@ class FakeConsole:
         if self.clients_error:
             raise self.clients_error
         return copy.deepcopy(self.clients)
+
+    async def get_networks(self) -> list[dict[str, Any]]:
+        if self.networks_error:
+            raise self.networks_error
+        return copy.deepcopy(self.networks)
+
+    async def get_traffic_routes(self) -> list[dict[str, Any]]:
+        if self.routes_error:
+            raise self.routes_error
+        return copy.deepcopy(self.routes)
 
     async def get_wan_configs(self) -> list[dict[str, Any]]:
         if self.error:

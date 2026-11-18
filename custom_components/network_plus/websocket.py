@@ -23,7 +23,7 @@ from homeassistant.util.hass_dict import HassKey
 from .const import DOMAIN
 from .coordinator import NetworkConfigEntry
 from .entity import expected_speed
-from .model import LteBackup, NetworkState, Uplink
+from .model import LanNetwork, LteBackup, NetworkState, Uplink
 
 # The version of the integration, as manifest.json has it; the page shows it at the bottom
 DATA_VERSION: HassKey[str] = HassKey(f"{DOMAIN}_version")
@@ -101,6 +101,9 @@ def state_dict(entry: NetworkConfigEntry, state: NetworkState) -> dict[str, Any]
         "latency": state.latency,
         "uplinks": [_uplink(entry, uplink) for uplink in state.uplinks.values()],
         "lte": [_lte(lte) for lte in (state.lte or {}).values()],
+        "networks": None
+        if state.networks is None
+        else [_network(state, network) for network in state.networks.values()],
         "speedtest_running": speedtest.running if speedtest else None,
         "remote": None
         if state.vpn_clients is None
@@ -123,6 +126,17 @@ def _uplink(entry: NetworkConfigEntry, uplink: Uplink) -> dict[str, Any]:
         "link_speed": uplink.link_speed,
         "full_duplex": uplink.full_duplex,
         "expected_speed": expected_speed(entry, uplink.key),
+    }
+
+
+def _network(state: NetworkState, network: LanNetwork) -> dict[str, Any]:
+    return {
+        "id": network.id,
+        "name": network.name,
+        "internet": state.network_internet(network),
+        "clients": network.clients,
+        # Per uplink, by key: whether it carries the network's traffic
+        "uplinks": {key: state.uplink_serves(network, u) for key, u in state.uplinks.items()},
     }
 
 

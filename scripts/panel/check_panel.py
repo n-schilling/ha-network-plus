@@ -770,13 +770,23 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
         expect("Online" in badges and "active" in badges, f"badges {badges}")
         bar = await page.locator(f"{PANEL} .bar").get_attribute("aria-label")
         expect(bool(bar) and "% of the data plan used" in (bar or ""), f"LTE bar label {bar!r}")
+        # The networks: whether each reaches the internet, per uplink in words
+        expect("Networks" in text and "Guest" in text, "the networks card missing")
+        marks = await page.locator(f"{PANEL} table.data ha-svg-icon").evaluate_all(
+            "els => els.map((e) => e.getAttribute('aria-label'))"
+        )
+        expect(
+            "LTE Failover WAN: does not carry it" in marks and "WAN: carries it" in marks,
+            f"network marks {marks}",
+        )
         about = (await page.locator(f"{PANEL} #about").inner_text()).strip()
         expect(about == f"Network Plus {VERSION}", f"version line: {about!r}")
         if shots is not None:
             await page.screenshot(path=str(shots / "uplinks.png"))
 
     await checks.run(
-        "Uplinks, Status: uplinks, LTE backup, states in words and the version line", status
+        "Uplinks, Status: uplinks, networks, LTE backup, states in words and the version line",
+        status,
     )
 
     async def every_page() -> None:

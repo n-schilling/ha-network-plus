@@ -55,6 +55,22 @@ async def test_overview(
     assert console["remote"] == [
         {"name": "Phone", "type": "TELEPORT", "since": "2023-11-14T22:13:20+00:00"}
     ]
+    assert console["networks"] == [
+        {
+            "id": "net-lan",
+            "name": "Default",
+            "internet": True,
+            "clients": 1,
+            "uplinks": {"WAN": True, "WAN_LTE_FAILOVER": True},
+        },
+        {
+            "id": "net-guest",
+            "name": "Guest",
+            "internet": True,
+            "clients": 1,
+            "uplinks": {"WAN": True, "WAN_LTE_FAILOVER": False},
+        },
+    ]
     assert set(console["history"]) == {"days", "events", "speedtests", "drills", "sessions"}
     # Asked for by its ID, the same console
     await client.send_json_auto_id(
@@ -108,6 +124,8 @@ async def test_overview_without_clients_and_lte_limit(
     assert console_state["remote"] is None
     assert console_state["lte"][0]["limit_bytes"] is None
     assert console_state["lte"][0]["period_start"] is None
+    # Without clients the networks are there, their clients unknown
+    assert [n["clients"] for n in console_state["networks"]] == [None, None]
 
 
 async def test_overview_is_for_admins(

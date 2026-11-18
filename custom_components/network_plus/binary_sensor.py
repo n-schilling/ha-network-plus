@@ -1,4 +1,4 @@
-"""Binary sensors: is an uplink online, is the backup in use, is a link slower than it should be."""
+"""Binary sensors: uplinks online, backup in use, slow links, the internet of each local network."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import NetworkConfigEntry
 from .entity import (
+    LanNetworkEntity,
     LteEntity,
     NetworkPlusEntity,
     UplinkEntity,
@@ -19,7 +20,7 @@ from .entity import (
     expected_speed,
     remove_stale_entities,
 )
-from .model import LteBackup, NetworkState, Uplink
+from .model import LanNetwork, LteBackup, NetworkState, Uplink
 
 # Read-only entities of a coordinator: no limit needed
 PARALLEL_UPDATES = 0
@@ -51,7 +52,12 @@ async def async_setup_entry(
 
     add_dynamic_entities(entry, async_add_entities, lambda state: state.uplinks, _uplink)
     add_dynamic_entities(entry, async_add_entities, _with_expectation, _checked)
+
+    def _network(network: LanNetwork) -> list[BinarySensorEntity]:
+        return [NetworkInternetSensor(entry, network)]
+
     add_dynamic_entities(entry, async_add_entities, lambda state: state.lte or {}, _lte)
+    add_dynamic_entities(entry, async_add_entities, lambda state: state.networks or {}, _network)
     # An expectation that was removed takes its sensor along
     state = entry.runtime_data.coordinator.data
     remove_stale_entities(
@@ -155,4 +161,44 @@ class LteSimProblemSensor(LteEntity, BinarySensorEntity):
         return {
             "state": lte.state if lte else None,
             "pin_tries_left": lte.sim_pin_tries_left if lte else None,
+        }
+
+
+class NetworkInternetSensor(LanNetworkEntity, BinarySensorEntity):
+    """Whether a local network reaches the internet over the uplink that carries it now.
+
+    Off while every uplink is down, while a cellular backup carries the
+    traffic and the network is not assigned to it, while a traffic route with
+    kill switch binds the network to an uplink that is down, or when the
+    network has no internet access at all. Unknown while that cannot be told.
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_translation_key = "network_internet"
+
+    def __init__(self, entry: NetworkConfigEntry, network: LanNetwork) -> None:
+        """Initialize the sensor."""
+        super().__init__(entry, network, "network_internet")
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return whether the network reaches the internet now."""
+        network = self.network
+        return self.coordinator.data.network_internet(network) if network else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the uplinks that would carry the network's traffic.
+
+        The number of clients is left out: it changes nearly every minute and
+        would fill the recorder; the page shows it.
+        """
+        state = self.coordinator.data
+        network = self.network
+        return {
+            "uplinks": [
+                key
+                for key, uplink in state.uplinks.items()
+                if network is not None and state.uplink_serves(network, uplink) is True
+            ]
         }

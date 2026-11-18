@@ -437,6 +437,31 @@ class VpnClient:
 
 
 @dataclass(frozen=True, slots=True)
+class LanNetwork:
+    """A local network the gateway routes to the internet (LAN, VLAN, guest network)."""
+
+    id: str  # the network in the console's configuration
+    name: str
+    # False: the network never reaches the internet ("Internet access" off)
+    internet_access: bool
+    # Whether the network may use a cellular backup (LTE, 5G); None if the console does not say
+    cellular_backup: bool | None
+    clients: int | None = None  # local clients in it now; None if the console does not tell
+
+
+@dataclass(frozen=True, slots=True)
+class PinnedRoute:
+    """A traffic route with kill switch: all internet traffic of its networks goes to one target.
+
+    If the target is down the traffic is dropped instead of taking another
+    uplink.
+    """
+
+    target: str  # the target network in the console's configuration: an uplink or a VPN client
+    networks: frozenset[str] | None  # the networks it binds; None: all clients
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkState:
     """The gateway and its uplinks at one moment."""
 
@@ -448,6 +473,8 @@ class NetworkState:
     speedtest: Speedtest | None = None
     lte: dict[str, LteBackup] | None = None  # by MAC; None: not looked for yet
     vpn_clients: tuple[VpnClient, ...] | None = None  # None: the console did not tell
+    networks: dict[str, LanNetwork] | None = None  # by ID; None: not read yet
+    routes: tuple[PinnedRoute, ...] | None = None  # None: not known
 
     @property
     def primary(self) -> str | None:
@@ -460,6 +487,51 @@ class NetworkState:
         if self.active is None or self.primary is None:
             return None
         return self.active != self.primary
+
+    def uplink_serves(self, network: LanNetwork, uplink: Uplink) -> bool | None:
+        """Return whether the network reaches the internet when ``uplink`` carries its traffic.
+
+        A wired uplink carries every network: UniFi Network assigns networks
+        only to a cellular backup (``lte_lan_enabled``). A traffic route with
+        kill switch binds a network to its target, whatever uplink is active.
+        """
+        if not network.internet_access:
+            return False
+        if self.routes is None:
+            return None
+        if (targets := self._pinned_targets(network)) is not None:
+            return uplink.config_id in targets
+        if uplink.port is None:
+            # No port of the gateway: the cellular backup
+            return network.cellular_backup
+        return True
+
+    def network_internet(self, network: LanNetwork) -> bool | None:
+        """Return whether the network reaches the internet now; None if that is not known."""
+        if not network.internet_access:
+            return False
+        if self.routes is None:
+            return None
+        if (targets := self._pinned_targets(network)) is not None:
+            by_config = {u.config_id: u for u in self.uplinks.values() if u.config_id}
+            online = [by_config[t].online if t in by_config else None for t in targets]
+            if any(value is True for value in online):
+                return True
+            return False if all(value is False for value in online) else None
+        if self.active is None:
+            # Every uplink down is a known answer; an unknown one is not
+            down = bool(self.uplinks) and all(u.online is False for u in self.uplinks.values())
+            return False if down else None
+        return self.uplink_serves(network, self.uplinks[self.active])
+
+    def _pinned_targets(self, network: LanNetwork) -> list[str] | None:
+        """Return the targets of the kill-switch routes that bind the network; None if none does."""
+        targets = [
+            route.target
+            for route in self.routes or ()
+            if route.networks is None or network.id in route.networks
+        ]
+        return targets or None
 
 
 @dataclass(frozen=True, slots=True)
@@ -499,8 +571,10 @@ def parse_state(
     configs: list[dict[str, Any]],
     lte_raws: list[dict[str, Any]] | None = None,
     clients: list[Any] | None = None,
+    networks: list[Any] | None = None,
+    routes: list[Any] | None = None,
 ) -> NetworkState:
-    """Build the state from the runtime objects, the uplink configuration and the clients."""
+    """Build the state from the runtime objects, the configuration and the clients."""
     names: dict[str, str] = {}
     priorities: dict[str, int] = {}
     config_ids: dict[str, str] = {}
@@ -562,7 +636,87 @@ def parse_state(
         speedtest=_speedtest(uplink, raw, by_key),
         lte={lte.mac: lte for lte in map(parse_lte, lte_raws)} if lte_raws is not None else None,
         vpn_clients=parse_clients(clients) if clients is not None else None,
+        networks=parse_networks(networks, clients) if networks is not None else None,
+        routes=parse_routes(routes) if routes is not None else None,
     )
+
+
+# Purposes of the networks the gateway routes to the internet; a VLAN-only
+# network has no gateway interface, uplinks and VPNs are no local networks
+ROUTED_PURPOSES = frozenset({"corporate", "guest"})
+
+# The traffic route that covers all internet traffic of its targets
+ROUTE_ALL_INTERNET = "INTERNET"
+
+
+def parse_networks(raws: list[Any], clients: list[Any] | None) -> dict[str, LanNetwork]:
+    """Return the enabled local networks, with the number of local clients in each.
+
+    The configuration of other networks holds secrets (PPPoE passwords, VPN
+    keys); only named fields of the local ones are taken over.
+    """
+    counts: dict[str, int] | None = None
+    if clients is not None:
+        local = [
+            c
+            for c in clients
+            if isinstance(c, dict) and str(c.get("type") or "").upper() in LOCAL_CLIENT_TYPES
+        ]
+        # A console whose clients name no network cannot be counted
+        if not local or any(c.get("network_id") for c in local):
+            counts = {}
+            for client in local:
+                if ident := client.get("network_id"):
+                    counts[str(ident)] = counts.get(str(ident), 0) + 1
+    found: dict[str, LanNetwork] = {}
+    for raw in raws:
+        if not isinstance(raw, dict) or raw.get("purpose") not in ROUTED_PURPOSES:
+            continue
+        if raw.get("enabled") is False or not raw.get("_id"):
+            continue
+        ident = str(raw["_id"])
+        backup = raw.get("lte_lan_enabled")
+        found[ident] = LanNetwork(
+            id=ident,
+            name=str(raw.get("name") or ident),
+            internet_access=raw.get("internet_access_enabled") is not False,
+            cellular_backup=backup if isinstance(backup, bool) else None,
+            clients=counts.get(ident, 0) if counts is not None else None,
+        )
+    return dict(sorted(found.items(), key=lambda item: item[1].name.lower()))
+
+
+def parse_routes(raws: list[Any]) -> tuple[PinnedRoute, ...]:
+    """Return the enabled traffic routes with kill switch that take all internet traffic.
+
+    Routes for single clients, domains, addresses or regions leave the rest of
+    a network's traffic alone and do not decide whether it reaches the internet.
+    """
+    pinned = []
+    for raw in raws:
+        if not isinstance(raw, dict) or raw.get("enabled") is not True:
+            continue
+        if raw.get("kill_switch_enabled") is not True:
+            continue
+        if str(raw.get("matching_target") or "").upper() != ROUTE_ALL_INTERNET:
+            continue
+        target = raw.get("network_id")
+        devices = raw.get("target_devices")
+        if not target or not isinstance(devices, list):
+            continue
+        kinds = [d for d in devices if isinstance(d, dict)]
+        if any(str(d.get("type") or "").upper() == "ALL_CLIENTS" for d in kinds):
+            networks: frozenset[str] | None = None
+        else:
+            networks = frozenset(
+                str(d["network_id"])
+                for d in kinds
+                if str(d.get("type") or "").upper() == "NETWORK" and d.get("network_id")
+            )
+            if not networks:
+                continue
+        pinned.append(PinnedRoute(target=str(target), networks=networks))
+    return tuple(pinned)
 
 
 def parse_lte(raw: dict[str, Any]) -> LteBackup:

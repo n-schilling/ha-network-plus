@@ -101,6 +101,14 @@
       },
       "sim_problem": {
         "name": "SIM problem"
+      },
+      "network_internet": {
+        "name": "{network} Internet",
+        "state_attributes": {
+          "uplinks": {
+            "name": "Uplinks that carry it"
+          }
+        }
       }
     },
     "button": {

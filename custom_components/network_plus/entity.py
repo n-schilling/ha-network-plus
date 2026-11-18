@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, EXPECTED_SPEED_OPTIONS
 from .coordinator import NetworkConfigEntry, NetworkCoordinator
-from .model import Gateway, LteBackup, NetworkState, Uplink
+from .model import Gateway, LanNetwork, LteBackup, NetworkState, Uplink
 
 
 def gateway_device_info(gateway: Gateway, name: str) -> DeviceInfo:
@@ -81,6 +81,26 @@ class UplinkEntity(NetworkPlusEntity):
         return super().available and self.uplink is not None
 
 
+class LanNetworkEntity(NetworkPlusEntity):
+    """An entity of one local network; unavailable while the configuration does not list it."""
+
+    def __init__(self, entry: NetworkConfigEntry, network: LanNetwork, key: str) -> None:
+        """Initialize the entity of ``network``."""
+        super().__init__(entry, f"{key}_{network.id}")
+        self.network_id = network.id
+        self._attr_translation_placeholders = {"network": network.name}
+
+    @property
+    def network(self) -> LanNetwork | None:
+        """Return the network as last read."""
+        return (self.coordinator.data.networks or {}).get(self.network_id)
+
+    @property
+    def available(self) -> bool:
+        """Return whether the console lists the network."""
+        return super().available and self.network is not None
+
+
 class LteEntity(CoordinatorEntity[NetworkCoordinator]):
     """An entity of one LTE backup device, which hangs below the gateway."""
 
@@ -141,7 +161,8 @@ def add_dynamic_entities[T](
 ) -> None:
     """Add entities for every item of ``items(state)``, also for items that appear later.
 
-    Used for the uplinks (by network group) and the LTE devices (by MAC).
+    Used for the uplinks (by network group), the local networks (by ID) and
+    the LTE devices (by MAC).
     """
     coordinator = entry.runtime_data.coordinator
     known: set[str] = set()

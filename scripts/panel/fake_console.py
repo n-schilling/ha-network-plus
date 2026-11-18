@@ -173,10 +173,30 @@ class FakeConsole:
             },
         ]
 
+    def networks(self) -> list[dict[str, Any]]:
+        """The local networks, the guest network not on the cellular backup, and the uplinks."""
+        return [
+            {
+                "_id": "net-lan",
+                "name": "Default",
+                "purpose": "corporate",
+                "enabled": True,
+                "lte_lan_enabled": True,
+            },
+            {
+                "_id": "net-guest",
+                "name": "Guest",
+                "purpose": "guest",
+                "enabled": True,
+                "lte_lan_enabled": False,
+            },
+            *({**c, "purpose": "wan"} for c in self.configs()),
+        ]
+
     @staticmethod
     def clients() -> list[dict[str, Any]]:
         return [
-            {"type": "WIRED", "display_name": "Desk", "id": "c-desk"},
+            {"type": "WIRED", "display_name": "Desk", "id": "c-desk", "network_id": "net-lan"},
             {
                 "type": "TELEPORT",
                 "id": "c-tablet",
@@ -196,11 +216,13 @@ class FakeConsole:
         app.router.add_get("/api/users/self", self._self)
         app.router.add_get(f"{SITE}/stat/device", self._devices)
         app.router.add_get(f"{SITE}/stat/sysinfo", self._sysinfo)
+        app.router.add_get(f"{SITE}/rest/networkconf", self._networks)
         app.router.add_get(f"{SITE}/rest/networkconf/{{id}}", self._network)
         app.router.add_put(f"{SITE}/rest/networkconf/{{id}}", self._write_network)
         app.router.add_post(f"{SITE}/cmd/devmgr", self._command)
         app.router.add_get(f"{SITE_V2}/wan/enriched-configuration", self._wans)
         app.router.add_get(f"{SITE_V2}/clients/active", self._clients)
+        app.router.add_get(f"{SITE_V2}/trafficroutes", self._routes)
         app.router.add_get("/proxy/network/wss/s/default/events", self._websocket)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -246,6 +268,16 @@ class FakeConsole:
 
     async def _sysinfo(self, request: web.Request) -> web.Response:
         return web.json_response({"data": [{"timezone": "Europe/Berlin"}]})
+
+    async def _networks(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.Response(status=401)
+        return web.json_response({"data": self.networks()})
+
+    async def _routes(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.Response(status=401)
+        return web.json_response([])
 
     async def _network(self, request: web.Request) -> web.Response:
         config = next(c for c in self.configs() if c["_id"] == request.match_info["id"])

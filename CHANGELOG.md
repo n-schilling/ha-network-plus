@@ -4,6 +4,18 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-18
+
+### Added
+
+- **"<network> Internet" per local network**: a connectivity sensor that says whether the network reaches the internet over the uplink that carries it now. A wired uplink carries every network (two wired uplinks keep every network online); a cellular backup (LTE, 5G) only the networks assigned to it in UniFi Network, so a guest network that is not assigned turns off during a failover. A traffic route with kill switch for all internet traffic binds a network to its target uplink. Unknown while that cannot be told. The attribute `uplinks` lists the uplinks that would carry the network.
+- The page shows the networks on Uplinks › Status: whether each reaches the internet now, a mark per uplink and the clients connected in it.
+- The diagnostics list per network what it reaches, without names.
+
+### Changed
+
+- The poll reads the network configuration and the traffic routes as well; a failed read keeps the last one, a console without traffic routes has none.
+
 ## [0.12.1] - 2026-11-17
 
 ### Fixed

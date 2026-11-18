@@ -24,6 +24,24 @@ async def test_diagnostics_hold_nothing_personal(
     secrets = (HOST, MAC, LTE_MAC, IPV4, IPV6, "homeassistant", "secret", "Cable", "2023")
     for secret in (*secrets, "9876", "123456789012345", "Carrier", "LTE backup", "Phone"):
         assert secret not in text
+    # Networks without names and IDs, the uplink and VPN secrets of their configuration not at all
+    for secret in ("Default", "Guest", "net-lan", "pppoe-secret", "vpn-secret"):
+        assert secret not in text
+    assert result["networks"] == [
+        {
+            "internet_access": True,
+            "cellular_backup": True,
+            "internet": True,
+            "uplinks": {"WAN": True, "WAN_LTE_FAILOVER": True},
+        },
+        {
+            "internet_access": True,
+            "cellular_backup": False,
+            "internet": True,
+            "uplinks": {"WAN": True, "WAN_LTE_FAILOVER": False},
+        },
+    ]
+    assert result["pinned_routes"] == 0
     assert result["gateway"] == {"model": "UDMPRO", "version": "4.0.0"}
     assert [u["key"] for u in result["uplinks"]] == ["WAN", "WAN_LTE_FAILOVER"]
     assert result["uplinks"][0]["has_ipv4"] is True
@@ -80,6 +98,20 @@ async def test_diagnostics_without_lte_and_clients(
     result = await async_get_config_entry_diagnostics(hass, config_entry)
     assert result["lte"] == []
     assert result["vpn_clients"] is None
+
+
+async def test_diagnostics_without_networks_and_routes(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """Networks and routes not read yet give None for both."""
+    console.networks_error = NetworkError("busy")
+    console.routes_error = NetworkError("busy")
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    result = await async_get_config_entry_diagnostics(hass, config_entry)
+    assert result["networks"] is None
+    assert result["pinned_routes"] is None
 
 
 async def test_diagnostics_hide_the_pinned_certificate(

@@ -18,6 +18,7 @@ from custom_components.network_plus.api import (
     NetworkAuthError,
     NetworkClient,
     NetworkError,
+    NetworkNotFoundError,
     NetworkPermissionError,
     NetworkServerError,
     NetworkWriteUnknownError,
@@ -142,6 +143,8 @@ class FakeSession:
 DEVICES = "/proxy/network/api/s/default/stat/device"
 WANS = "/proxy/network/v2/api/site/default/wan/enriched-configuration"
 CLIENTS = "/proxy/network/v2/api/site/default/clients/active?includeTeleport=true"
+NETWORKS = "/proxy/network/api/s/default/rest/networkconf"
+ROUTES = "/proxy/network/v2/api/site/default/trafficroutes"
 
 
 def _client(session: FakeSession) -> NetworkClient:
@@ -278,6 +281,7 @@ async def test_get_errors() -> None:
     session.gets[DEVICES] = [
         FakeResponse(502, path=DEVICES),
         FakeResponse(404, path=DEVICES),
+        FakeResponse(400, path=DEVICES),
         FakeResponse(200, ValueError("no json")),
         FakeResponse(200, {"data": "x"}),
         FakeResponse(200, []),
@@ -288,9 +292,12 @@ async def test_get_errors() -> None:
     # A server error has its own type: the poll keeps the last state for a while
     with pytest.raises(NetworkServerError, match="HTTP 502"):
         await client.get_devices()
-    with pytest.raises(NetworkError, match="HTTP 404") as err:
+    with pytest.raises(NetworkNotFoundError, match="HTTP 404") as err:
         await client.get_devices()
     assert not isinstance(err.value, NetworkServerError)
+    with pytest.raises(NetworkError, match="HTTP 400") as err:
+        await client.get_devices()
+    assert not isinstance(err.value, NetworkNotFoundError)
     with pytest.raises(NetworkError, match="no JSON"):
         await client.get_devices()
     with pytest.raises(NetworkError, match="unexpected"):
@@ -367,6 +374,37 @@ async def test_get_active_clients() -> None:
     assert await client.get_active_clients() == [{"type": "WIRED"}]
     with pytest.raises(NetworkError, match="unexpected"):
         await client.get_active_clients()
+
+
+async def test_get_networks() -> None:
+    """The networks come in the data list; anything else is an error."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    session.gets[NETWORKS] = [
+        FakeResponse(200, {"data": [{"_id": "net-lan"}, "junk"]}),
+        FakeResponse(200, {"data": "x"}),
+    ]
+    client = _client(session)
+    assert await client.get_networks() == [{"_id": "net-lan"}]
+    with pytest.raises(NetworkError, match="unexpected"):
+        await client.get_networks()
+
+
+async def test_get_traffic_routes() -> None:
+    """The routes come as a list; a console without them answers 404."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    session.gets[ROUTES] = [
+        FakeResponse(200, [{"_id": "route-1"}, "junk"]),
+        FakeResponse(200, {}),
+        FakeResponse(404, path=ROUTES),
+    ]
+    client = _client(session)
+    assert await client.get_traffic_routes() == [{"_id": "route-1"}]
+    with pytest.raises(NetworkError, match="unexpected"):
+        await client.get_traffic_routes()
+    with pytest.raises(NetworkNotFoundError):
+        await client.get_traffic_routes()
 
 
 def test_find_lte_devices() -> None:
