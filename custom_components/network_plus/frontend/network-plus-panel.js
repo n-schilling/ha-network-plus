@@ -38,6 +38,8 @@ if (!customElements.get("network-plus-panel")) {
     err: "M12,2C17.53,2 22,6.47 22,12C22,17.53 17.53,22 12,22C6.47,22 2,17.53 2,12C2,6.47 6.47,2 12,2M15.59,7L12,10.59L8.41,7L7,8.41L10.59,12L7,15.59L8.41,17L12,13.41L15.59,17L17,15.59L13.41,12L17,8.41L15.59,7Z",
     unknown: "M15.07,11.25L14.17,12.17C13.45,12.89 13,13.5 13,15H11V14.5C11,13.39 11.45,12.39 12.17,11.67L13.41,10.41C13.78,10.05 14,9.55 14,9C14,7.89 13.1,7 12,7A2,2 0 0,0 10,9H8A4,4 0 0,1 12,5A4,4 0 0,1 16,9C16,9.88 15.64,10.67 15.07,11.25M13,19H11V17H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12C22,6.47 17.5,2 12,2Z",
     warn: "M21,9L17,5V8H10V10H17V13M7,11L3,15L7,19V16H14V14H7V11Z",
+    // mdi:alert-circle, a network that only one uplink carries
+    alert: "M13,13H11V7H13M13,17H11V15H13M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2Z",
     ip: "M15,9H13V7H15V9M22,20V22H15A1,1 0 0,1 14,23H10A1,1 0 0,1 9,22H2V20H9A1,1 0 0,1 10,19H11V17H7A2,2 0 0,1 5,15V5A2,2 0 0,1 7,3H17A2,2 0 0,1 19,5V15A2,2 0 0,1 17,17H13V19H14A1,1 0 0,1 15,20H22M9,5H7V15H9V5M11,15H13V11H15A2,2 0 0,0 17,9V7A2,2 0 0,0 15,5H11V15Z",
   };
 
@@ -86,8 +88,8 @@ if (!customElements.get("network-plus-panel")) {
       name: "Name", kind: "Kind", from: "From", until: "Until", duration: "Duration",
       noSessions: "No finished session in the kept period.",
       networks: "Networks", network: "Network", internet: "Internet now", clients: "Clients",
-      carries: "carries it", notCarries: "does not carry it", noBackup: "no backup",
-      networksHelp: "Whether each local network reaches the internet, now and over each uplink. A wired uplink carries every network; a cellular backup only the networks assigned to it in UniFi Network. A traffic route with kill switch binds a network to its target uplink. “No backup”: only one uplink carries the network, whatever is online now. Clients: connected now.",
+      carries: "carries it", notCarries: "does not carry it", noBackup: "no backup", withBackup: "with backup", redundancy: "Failover",
+      networksHelp: "Whether each local network reaches the internet, now and over each uplink. A wired uplink carries every network; a cellular backup only the networks assigned to it in UniFi Network. A traffic route with kill switch binds a network to its target uplink. Failover: whether a second uplink carries the network, whatever is online now; an exclamation mark if only one does. Clients: connected now.",
     },
     de: {
       title: "Network Plus", tabUplinks: "Leitungen", tabTests: "Tests", tabRemote: "Fernzugriff", subStatus: "Status",
@@ -122,8 +124,8 @@ if (!customElements.get("network-plus-panel")) {
       name: "Name", kind: "Art", from: "Von", until: "Bis", duration: "Dauer",
       noSessions: "Keine beendete Sitzung im aufbewahrten Zeitraum.",
       networks: "Netze", network: "Netz", internet: "Internet jetzt", clients: "Clients",
-      carries: "versorgt es", notCarries: "versorgt es nicht", noBackup: "ohne Reserve",
-      networksHelp: "Ob jedes lokale Netz ins Internet kommt, jetzt und über jede Leitung. Eine Kabel-Leitung versorgt alle Netze, eine Mobilfunk-Reserve nur die Netze, die ihr in UniFi Network zugewiesen sind. Eine Traffic Route mit Kill Switch bindet ein Netz an ihre Ziel-Leitung. „Ohne Reserve“: nur eine Leitung versorgt das Netz, egal was gerade online ist. Clients: gerade verbunden.",
+      carries: "versorgt es", notCarries: "versorgt es nicht", noBackup: "ohne Reserve", withBackup: "mit Reserve", redundancy: "Ausfallsicherheit",
+      networksHelp: "Ob jedes lokale Netz ins Internet kommt, jetzt und über jede Leitung. Eine Kabel-Leitung versorgt alle Netze, eine Mobilfunk-Reserve nur die Netze, die ihr in UniFi Network zugewiesen sind. Eine Traffic Route mit Kill Switch bindet ein Netz an ihre Ziel-Leitung. Ausfallsicherheit: ob eine zweite Leitung das Netz versorgt, egal was gerade online ist; ein Ausrufezeichen, wenn nur eine es tut. Clients: gerade verbunden.",
     },
   };
 
@@ -600,14 +602,22 @@ if (!customElements.get("network-plus-panel")) {
         return `<ha-svg-icon class="kind" style="color:${STATE_COLOR[kind]}" path="${MDI[kind]}" role="img" aria-label="${esc(word)}" title="${esc(word)}"></ha-svg-icon>`;
       };
       const head = `<tr><th>${esc(this._t("network"))}</th><th>${esc(this._t("internet"))}</th>` +
-        c.uplinks.map((u) => `<th>${esc(u.name)}</th>`).join("") + `<th class="n">${esc(this._t("clients"))}</th></tr>`;
-      // Only one uplink carries the network, by the configuration; unknown marks leave it open
-      const single = (n) => {
+        c.uplinks.map((u) => `<th>${esc(u.name)}</th>`).join("") +
+        `<th>${esc(this._t("redundancy"))}</th><th class="n">${esc(this._t("clients"))}</th></tr>`;
+      // By the configuration: a second uplink carries the network (check), only one
+      // (exclamation mark, a warning rather than an error), none (no internet access: –);
+      // an unknown mark leaves it open
+      const redundancy = (n) => {
         const marks = c.uplinks.map((u) => n.uplinks[u.key]);
-        return c.uplinks.length > 1 && !marks.includes(null) && marks.filter((v) => v === true).length === 1;
+        if (marks.includes(null) || marks.includes(undefined)) return mark(null);
+        const carrying = marks.filter((v) => v === true).length;
+        if (!carrying) return "–";
+        const [kind, icon, word] = carrying > 1 ? ["ok", "ok", this._t("withBackup")] : ["warn", "alert", this._t("noBackup")];
+        return `<ha-svg-icon class="kind" style="color:${STATE_COLOR[kind]}" path="${MDI[icon]}" role="img" aria-label="${esc(word)}" title="${esc(word)}"></ha-svg-icon>`;
       };
-      const rows = c.networks.map((n) => `<tr><td>${esc(n.name)}${single(n) ? ` ${this._badge(this._t("noBackup"), "warn")}` : ""}</td><td>${this._online(n.internet)}</td>` +
+      const rows = c.networks.map((n) => `<tr><td>${esc(n.name)}</td><td>${this._online(n.internet)}</td>` +
         c.uplinks.map((u) => `<td>${mark(n.uplinks[u.key], `${u.name}: ${this._t("carries")}`, `${u.name}: ${this._t("notCarries")}`)}</td>`).join("") +
+        `<td>${redundancy(n)}</td>` +
         `<td class="n">${Number.isFinite(n.clients) ? this._num(n.clients) : "–"}</td></tr>`).join("");
       return this._card(esc(this._t("networks")), `<div class="scroll"><table class="data">${head}${rows}</table></div>`, this._t("networksHelp"));
     }

@@ -4,6 +4,12 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-18
+
+### Changed
+
+- The networks on Uplinks › Status have a column "Failover" instead of the badge "no backup" beside the name: a check when a second uplink carries the network, an orange exclamation mark when only one does, whatever is online now; "–" for a network without internet access.
+
 ## [0.13.0] - 2026-11-18
 
 ### Added

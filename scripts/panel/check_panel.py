@@ -772,11 +772,6 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
         expect(bool(bar) and "% of the data plan used" in (bar or ""), f"LTE bar label {bar!r}")
         # The networks: whether each reaches the internet, per uplink in words
         expect("Networks" in text and "Guest" in text, "the networks card missing")
-        rows = await page.locator(f"{PANEL} table.data tr").all_inner_texts()
-        flagged = [
-            r.split("\t")[0].replace("no backup", "").strip() for r in rows if "no backup" in r
-        ]
-        expect(flagged == ["Guest"], f"networks without backup {flagged}")
         marks = await page.locator(f"{PANEL} table.data ha-svg-icon").evaluate_all(
             "els => els.map((e) => e.getAttribute('aria-label'))"
         )
@@ -784,6 +779,14 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
             "LTE Failover WAN: does not carry it" in marks and "WAN: carries it" in marks,
             f"network marks {marks}",
         )
+        # Failover: an exclamation mark for the network only one uplink carries, a check otherwise
+        expect("Failover" in text, "the failover column missing")
+        flagged = await page.locator(f"{PANEL} table.data tr").evaluate_all(
+            """rows => rows.filter((r) => r.querySelector('[aria-label="no backup"]'))
+                .map((r) => r.cells[0].innerText.trim())"""
+        )
+        expect(flagged == ["Guest"], f"networks without backup {flagged}")
+        expect("with backup" in marks, f"a network with backup unmarked {marks}")
         about = (await page.locator(f"{PANEL} #about").inner_text()).strip()
         expect(about == f"Network Plus {VERSION}", f"version line: {about!r}")
         if shots is not None:
