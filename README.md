@@ -90,7 +90,7 @@ UniFi Network assigns local networks to a cellular backup one by one (LTE, 5G: t
 - A network with internet access turned off is always off; with every uplink down every network is off.
 - The sensor is unknown while that cannot be told: the active uplink is unknown, the console does not say whether a network may use the backup, or the traffic routes could not be read yet.
 
-The attribute `uplinks` lists the uplinks that would carry the network. The networks and the traffic routes are read with every poll; a failed read keeps the last configuration, a console without traffic routes has none. The page shows every network against every uplink, with the clients connected in it now.
+The attribute `uplinks` lists the uplinks that would carry the network. The networks and the traffic routes are read with every poll; a failed read keeps the last configuration, a console without traffic routes has none. The page shows every network against every uplink, with the clients connected in it now; a network that only one uplink carries, whatever is online now, has the badge "no backup". There is no entity for that, as it changes only with the configuration: `{{ state_attr('binary_sensor.gateway_guest_internet', 'uplinks') | length < 2 }}` tells the same, while the sensor is not unknown.
 
 ### Speed test
 

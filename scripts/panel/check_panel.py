@@ -772,6 +772,11 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
         expect(bool(bar) and "% of the data plan used" in (bar or ""), f"LTE bar label {bar!r}")
         # The networks: whether each reaches the internet, per uplink in words
         expect("Networks" in text and "Guest" in text, "the networks card missing")
+        rows = await page.locator(f"{PANEL} table.data tr").all_inner_texts()
+        flagged = [
+            r.split("\t")[0].replace("no backup", "").strip() for r in rows if "no backup" in r
+        ]
+        expect(flagged == ["Guest"], f"networks without backup {flagged}")
         marks = await page.locator(f"{PANEL} table.data ha-svg-icon").evaluate_all(
             "els => els.map((e) => e.getAttribute('aria-label'))"
         )
