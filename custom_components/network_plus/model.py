@@ -434,6 +434,23 @@ class VpnClient:
     # Tells two clients of the same name apart: a hash of the console's ID of
     # the client, never shown and never the ID itself
     key: str = ""
+    # Bytes since the client connected, as the client sees them: down is what
+    # the console sent it (its tx_bytes), up what it received from it (rx_bytes)
+    down_bytes: int | None = None
+    up_bytes: int | None = None
+    network_id: str | None = None  # the local network the client lands in
+
+
+@dataclass(frozen=True, slots=True)
+class KnownRemote:
+    """A remote client the console knows, connected now or before."""
+
+    name: str
+    type: str
+    last_seen: datetime | None
+    connected: bool
+    key: str = ""
+    network_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,6 +490,7 @@ class NetworkState:
     speedtest: Speedtest | None = None
     lte: dict[str, LteBackup] | None = None  # by MAC; None: not looked for yet
     vpn_clients: tuple[VpnClient, ...] | None = None  # None: the console did not tell
+    known_remote: tuple[KnownRemote, ...] | None = None  # None: not read
     networks: dict[str, LanNetwork] | None = None  # by ID; None: not read yet
     routes: tuple[PinnedRoute, ...] | None = None  # None: not known
 
@@ -573,6 +591,7 @@ def parse_state(
     clients: list[Any] | None = None,
     networks: list[Any] | None = None,
     routes: list[Any] | None = None,
+    client_history: list[Any] | None = None,
 ) -> NetworkState:
     """Build the state from the runtime objects, the configuration and the clients."""
     names: dict[str, str] = {}
@@ -638,6 +657,9 @@ def parse_state(
         vpn_clients=parse_clients(clients) if clients is not None else None,
         networks=parse_networks(networks, clients) if networks is not None else None,
         routes=parse_routes(routes) if routes is not None else None,
+        known_remote=parse_known_remote(client_history, clients)
+        if client_history is not None
+        else None,
     )
 
 
@@ -763,15 +785,66 @@ def parse_clients(clients: list[Any]) -> tuple[VpnClient, ...]:
             client.get("display_name") or client.get("name") or client.get("hostname") or kind
         )
         ident = client.get("id") or client.get("_id") or client.get("mac")
+        network = client.get("network_id")
         remote.append(
             VpnClient(
                 name=name,
                 type=kind,
                 since=_timestamp_s(client.get("assoc_time")),
                 key=client_key(kind, str(ident) if ident else None, name),
+                down_bytes=_bytes(client.get("tx_bytes")),
+                up_bytes=_bytes(client.get("rx_bytes")),
+                network_id=str(network) if network else None,
             )
         )
     return tuple(sorted(remote, key=lambda c: (c.type, c.name)))
+
+
+def parse_known_remote(history: list[Any], clients: list[Any] | None) -> tuple[KnownRemote, ...]:
+    """Return the remote clients the console knows, the connected ones from the active clients.
+
+    The console's client history lists every client it saw, a remote one
+    with its type, name and when it was last seen; a client connected now is
+    taken from the active clients, which are newer. Newest first.
+    """
+    found: dict[str, KnownRemote] = {}
+    for source, connected in ((history, False), (clients or [], True)):
+        for client in source:
+            if not isinstance(client, dict):
+                continue
+            kind = str(client.get("type") or "").upper()
+            if not kind or kind in LOCAL_CLIENT_TYPES:
+                continue
+            status = str(client.get("status") or "").lower()
+            if connected and status == "offline":
+                # The active list repeats remote clients of its history as offline
+                continue
+            # The active clients decide; without them the history's status does
+            online = connected or (clients is None and status == "online")
+            name = str(
+                client.get("display_name") or client.get("name") or client.get("hostname") or kind
+            )
+            ident = client.get("id") or client.get("_id") or client.get("mac")
+            key = client_key(kind, str(ident) if ident else None, name)
+            network = client.get("network_id")
+            found[key] = KnownRemote(
+                name=name,
+                type=kind,
+                last_seen=_timestamp_s(client.get("last_seen")),
+                connected=online,
+                key=key,
+                network_id=str(network) if network else None,
+            )
+    return tuple(
+        sorted(
+            found.values(),
+            key=lambda c: (
+                not c.connected,
+                -(c.last_seen.timestamp() if c.last_seen else 0),
+                c.name,
+            ),
+        )
+    )
 
 
 def client_key(kind: str, ident: str | None, name: str) -> str:
@@ -1094,6 +1167,12 @@ def _timestamp(seconds: float) -> datetime | None:
 
 def _dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _bytes(value: Any) -> int | None:
+    """Return a byte counter; a negative one is no count."""
+    count = _int(value)
+    return count if count is not None and count >= 0 else None
 
 
 def _int(value: Any) -> int | None:

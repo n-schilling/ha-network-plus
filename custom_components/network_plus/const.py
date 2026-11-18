@@ -14,6 +14,10 @@ SITE: Final = "default"
 # what the websocket missed (reconnects, restarts) and refreshes the uplink names.
 UPDATE_INTERVAL: Final = timedelta(seconds=60)
 
+# The console's client history lists every client it ever saw; read for the
+# known remote clients, which change rarely, so not with every poll
+CLIENT_HISTORY_INTERVAL: Final = timedelta(minutes=15)
+
 # Waiting time before the websocket connects again, doubled per failure.
 RECONNECT_MIN: Final = 5.0
 RECONNECT_MAX: Final = 300.0

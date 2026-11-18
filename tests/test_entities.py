@@ -1146,3 +1146,38 @@ async def test_network_appears_disappears_and_is_renamed(
         hass.states.get(GUEST_INTERNET).attributes["friendly_name"]  # type: ignore[union-attr]
         == "Gateway Visitors Internet"
     )
+
+
+async def test_client_history_read_every_quarter_hour(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """The known remote clients come from the client history, read every 15 minutes."""
+    coordinator = setup_entry.runtime_data.coordinator
+    assert console.client_history_calls == 1
+    assert [k.name for k in coordinator.data.known_remote] == ["Phone", "Old tablet"]
+    await _poll(hass, setup_entry)
+    assert console.client_history_calls == 1
+    # A failed read keeps the last one and is tried again with the next poll
+    freezer.tick(timedelta(minutes=15))
+    console.client_history_error = NetworkServerError("busy")
+    await _poll(hass, setup_entry)
+    assert coordinator.last_update_success is True
+    assert [k.name for k in coordinator.data.known_remote] == ["Phone", "Old tablet"]
+    console.client_history_error = None
+    console.client_history = []
+    await _poll(hass, setup_entry)
+    assert console.client_history_calls == 3
+    assert [k.name for k in coordinator.data.known_remote] == ["Phone"]
+    # A console without the endpoint knows no remote clients
+    freezer.tick(timedelta(minutes=15))
+    console.client_history_error = NetworkNotFoundError("HTTP 404")
+    await _poll(hass, setup_entry)
+    assert coordinator.data.known_remote is None
+    # A rejected login fails the poll
+    freezer.tick(timedelta(minutes=15))
+    console.client_history_error = NetworkAuthError("rejected")
+    await _poll(hass, setup_entry)
+    assert coordinator.last_update_success is False

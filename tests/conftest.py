@@ -279,10 +279,30 @@ def lte_report_row(day: datetime, used: float, mac: str = LTE_MAC) -> dict[str, 
 
 
 def teleport_client(
-    name: str = "Phone", since: int = 1_700_000_000, client_id: str | None = None
+    name: str = "Phone",
+    since: int = 1_700_000_000,
+    client_id: str | None = None,
+    down: int | None = 3_000_000,
+    up: int | None = 200_000,
 ) -> dict[str, Any]:
-    """Return a connected Teleport client as the console lists it."""
-    client = {"type": "TELEPORT", "display_name": name, "assoc_time": since, "status": "online"}
+    """Return a connected Teleport client as the console lists it.
+
+    The console counts from its own side: ``tx_bytes`` is what it sent the
+    client (the client's download), ``rx_bytes`` what it received (upload).
+    """
+    client: dict[str, Any] = {
+        "type": "TELEPORT",
+        "display_name": name,
+        "assoc_time": since,
+        "last_seen": since + 600,
+        "status": "online",
+        "ip": "192.0.2.200",
+        "network_id": "net-lan",
+    }
+    if down is not None:
+        client["tx_bytes"] = down
+    if up is not None:
+        client["rx_bytes"] = up
     if client_id is not None:
         client["id"] = client_id
     return client
@@ -309,6 +329,20 @@ class FakeConsole:
             teleport_client(),
         ]
         self.networks = networks()
+        # Every client the console saw: an old remote one and the connected one
+        self.client_history: list[dict[str, Any]] = [
+            {
+                "type": "TELEPORT",
+                "display_name": "Old tablet",
+                "id": "c-old",
+                "last_seen": 1_690_000_000,
+                "status": "offline",
+                "network_id": "net-lan",
+            },
+            {"type": "WIRED", "display_name": "Desk", "last_seen": 1_700_000_000},
+        ]
+        self.client_history_error: Exception | None = None
+        self.client_history_calls = 0
         self.routes: list[dict[str, Any]] = []
         self.networks_error: Exception | None = None
         self.routes_error: Exception | None = None
@@ -361,6 +395,12 @@ class FakeConsole:
         if self.clients_error:
             raise self.clients_error
         return copy.deepcopy(self.clients)
+
+    async def get_client_history(self) -> list[dict[str, Any]]:
+        self.client_history_calls += 1
+        if self.client_history_error:
+            raise self.client_history_error
+        return copy.deepcopy(self.client_history)
 
     async def get_networks(self) -> list[dict[str, Any]]:
         if self.networks_error:

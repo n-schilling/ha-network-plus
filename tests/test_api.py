@@ -145,6 +145,10 @@ WANS = "/proxy/network/v2/api/site/default/wan/enriched-configuration"
 CLIENTS = "/proxy/network/v2/api/site/default/clients/active?includeTeleport=true"
 NETWORKS = "/proxy/network/api/s/default/rest/networkconf"
 ROUTES = "/proxy/network/v2/api/site/default/trafficroutes"
+HISTORY = (
+    "/proxy/network/v2/api/site/default/clients/history"
+    "?onlyNonBlocked=true&includeTrafficUsage=false&withinHours=0"
+)
 
 
 def _client(session: FakeSession) -> NetworkClient:
@@ -388,6 +392,20 @@ async def test_get_networks() -> None:
     assert await client.get_networks() == [{"_id": "net-lan"}]
     with pytest.raises(NetworkError, match="unexpected"):
         await client.get_networks()
+
+
+async def test_get_client_history() -> None:
+    """The client history comes as a list; anything else is an error."""
+    session = FakeSession()
+    session.login = [FakeResponse(200)]
+    session.gets[HISTORY] = [
+        FakeResponse(200, [{"type": "TELEPORT"}, "junk"]),
+        FakeResponse(200, {}),
+    ]
+    client = _client(session)
+    assert await client.get_client_history() == [{"type": "TELEPORT"}]
+    with pytest.raises(NetworkError, match="unexpected"):
+        await client.get_client_history()
 
 
 async def test_get_traffic_routes() -> None:

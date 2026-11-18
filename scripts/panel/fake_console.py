@@ -202,8 +202,27 @@ class FakeConsole:
                 "id": "c-tablet",
                 "display_name": "Travel tablet",
                 "assoc_time": int(time.time()) - 42 * 60,
+                "last_seen": int(time.time()) - 20,
                 "status": "online",
+                "network_id": "net-lan",
+                "tx_bytes": 1_840_000_000,
+                "rx_bytes": 96_000_000,
             },
+        ]
+
+    @staticmethod
+    def client_history() -> list[dict[str, Any]]:
+        """Every client the console saw: an old Teleport phone, a local client."""
+        return [
+            {
+                "type": "TELEPORT",
+                "id": "c-phone",
+                "display_name": "Old phone",
+                "last_seen": int(time.time()) - 40 * 86400,
+                "status": "offline",
+                "network_id": "net-lan",
+            },
+            {"type": "WIRED", "display_name": "Desk", "id": "c-desk"},
         ]
 
     # The server
@@ -223,6 +242,7 @@ class FakeConsole:
         app.router.add_get(f"{SITE_V2}/wan/enriched-configuration", self._wans)
         app.router.add_get(f"{SITE_V2}/clients/active", self._clients)
         app.router.add_get(f"{SITE_V2}/trafficroutes", self._routes)
+        app.router.add_get(f"{SITE_V2}/clients/history", self._client_history)
         app.router.add_get("/proxy/network/wss/s/default/events", self._websocket)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -273,6 +293,11 @@ class FakeConsole:
         if not self._authorized(request):
             return web.Response(status=401)
         return web.json_response({"data": self.networks()})
+
+    async def _client_history(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.Response(status=401)
+        return web.json_response(self.client_history())
 
     async def _routes(self, request: web.Request) -> web.Response:
         if not self._authorized(request):

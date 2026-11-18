@@ -268,6 +268,16 @@ class NetworkClient:
             raise NetworkError("trafficroutes: unexpected answer")
         return [r for r in body if isinstance(r, dict)]
 
+    async def get_client_history(self) -> list[dict[str, Any]]:
+        """Return every client the console saw, remote ones included, without traffic."""
+        body = await self._get(
+            f"/proxy/network/v2/api/site/{self._site}/clients/history"
+            "?onlyNonBlocked=true&includeTrafficUsage=false&withinHours=0"
+        )
+        if not isinstance(body, list):
+            raise NetworkError("clients/history: unexpected answer")
+        return [c for c in body if isinstance(c, dict)]
+
     async def get_active_clients(self) -> list[dict[str, Any]]:
         """Return the active clients, Teleport and VPN clients included."""
         body = await self._get(

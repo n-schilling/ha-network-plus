@@ -489,8 +489,55 @@ def test_state_with_lte_and_clients() -> None:
             "TELEPORT",
             datetime.fromtimestamp(1_700_000_000, UTC),
             client_key("TELEPORT", None, "Phone"),
+            down_bytes=3_000_000,
+            up_bytes=200_000,
+            network_id="net-lan",
         ),
     )
+    # No counters or a broken one: unknown
+    broken = parse_clients([{**teleport_client(down=None), "rx_bytes": -1}])
+    assert (broken[0].down_bytes, broken[0].up_bytes, broken[0].network_id) == (
+        None,
+        None,
+        "net-lan",
+    )
+    assert parse_clients([{**teleport_client(), "network_id": None}])[0].network_id is None
+    assert state.known_remote is None
+
+
+def test_known_remote() -> None:
+    """Every remote client the console knows: connected ones first, then by when last seen."""
+    history = [
+        {"type": "TELEPORT", "display_name": "Old", "id": "a", "last_seen": 1_600_000_000},
+        {"type": "TELEPORT", "name": "Newer", "id": "b", "last_seen": 1_650_000_000},
+        {
+            "type": "TELEPORT",
+            "display_name": "Phone",
+            "last_seen": 1_690_000_000,
+            "status": "offline",
+            "network_id": "net-lan",
+        },
+        {"type": "WIRED", "display_name": "Desk"},
+        {"type": "VPN", "status": "online"},
+        "junk",
+    ]
+    clients = [teleport_client(), {**teleport_client("Gone"), "status": "offline"}, "junk"]
+    known = parse_state(gateway(), wan_configs(), None, clients, None, None, history).known_remote
+    assert known is not None
+    assert [(k.name, k.connected) for k in known] == [
+        ("Phone", True),
+        ("Newer", False),
+        ("Old", False),
+        ("VPN", False),
+    ]
+    phone = known[0]
+    assert phone.last_seen == datetime.fromtimestamp(1_700_000_600, UTC)
+    assert phone.network_id == "net-lan"
+    assert known[3].last_seen is None
+    # Without the active clients the history's status decides
+    alone = parse_state(gateway(), wan_configs(), None, None, None, None, history).known_remote
+    assert alone is not None
+    assert [(k.name, k.connected) for k in alone][:2] == [("VPN", True), ("Phone", False)]
 
 
 def test_essentials() -> None:

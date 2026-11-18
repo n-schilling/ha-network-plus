@@ -124,7 +124,8 @@ If the console has an LTE backup device, it gets a device of its own below the g
 - **Uplinks › History** (`/uplinks/history`): failovers and returns with how long the backup carried the traffic, brief failovers, uplinks going down and up with how long they were gone, new public addresses (the uplink and the family, not the address).
 - **Tests › Speed tests** (`/tests/speedtests`): download over time per uplink, and every result with upload and ping.
 - **Tests › Drills** (`/tests/drills`): every backup drill with failover time, return time and LTE data, and the averages.
-- **Remote › Connected now** and **Remote › Sessions** (`/remote/now`, `/remote/sessions`): the Teleport and VPN clients connected now, and the finished sessions.
+- **Remote › Connected now** and **Remote › Sessions** (`/remote/now`, `/remote/sessions`): the Teleport and VPN clients connected now with the network they land in and their download and upload, and the finished sessions with their volume (the last values read before the session ended, so up to a minute may be missing).
+- **Remote › Known devices** (`/remote/devices`): every remote client the console knows, connected now or before, with its network and when it was last connected, from the console's client history (read every 15 minutes). The console does not report a remote client's public address, so the page cannot show where it connects from.
 
 The addresses of before (`/network-plus/events`, `/speedtests`, `/drills`, `/uplinks`, `/remote`) lead to the page that took their place. Explanations, such as how long something is kept, sit behind an (i) in a card's title.
 

@@ -107,7 +107,29 @@ def state_dict(entry: NetworkConfigEntry, state: NetworkState) -> dict[str, Any]
         "speedtest_running": speedtest.running if speedtest else None,
         "remote": None
         if state.vpn_clients is None
-        else [{"name": c.name, "type": c.type, "since": _iso(c.since)} for c in state.vpn_clients],
+        else [
+            {
+                "name": c.name,
+                "type": c.type,
+                "since": _iso(c.since),
+                "down_bytes": c.down_bytes,
+                "up_bytes": c.up_bytes,
+                "network": _network_name(state, c.network_id),
+            }
+            for c in state.vpn_clients
+        ],
+        "known_remote": None
+        if state.known_remote is None
+        else [
+            {
+                "name": c.name,
+                "type": c.type,
+                "last_seen": _iso(c.last_seen),
+                "connected": c.connected,
+                "network": _network_name(state, c.network_id),
+            }
+            for c in state.known_remote
+        ],
     }
 
 
@@ -127,6 +149,12 @@ def _uplink(entry: NetworkConfigEntry, uplink: Uplink) -> dict[str, Any]:
         "full_duplex": uplink.full_duplex,
         "expected_speed": expected_speed(entry, uplink.key),
     }
+
+
+def _network_name(state: NetworkState, ident: str | None) -> str | None:
+    """Return the name of a local network; None if it is not known."""
+    network = (state.networks or {}).get(ident or "")
+    return network.name if network else None
 
 
 def _network(state: NetworkState, network: LanNetwork) -> dict[str, Any]:

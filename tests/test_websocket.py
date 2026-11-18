@@ -53,7 +53,30 @@ async def test_overview(
     assert console["lte"][0]["limit_bytes"] == 8_000_000_000
     assert console["speedtest_running"] is False
     assert console["remote"] == [
-        {"name": "Phone", "type": "TELEPORT", "since": "2023-11-14T22:13:20+00:00"}
+        {
+            "name": "Phone",
+            "type": "TELEPORT",
+            "since": "2023-11-14T22:13:20+00:00",
+            "down_bytes": 3_000_000,
+            "up_bytes": 200_000,
+            "network": "Default",
+        }
+    ]
+    assert console["known_remote"] == [
+        {
+            "name": "Phone",
+            "type": "TELEPORT",
+            "last_seen": "2023-11-14T22:23:20+00:00",
+            "connected": True,
+            "network": "Default",
+        },
+        {
+            "name": "Old tablet",
+            "type": "TELEPORT",
+            "last_seen": "2023-07-22T04:26:40+00:00",
+            "connected": False,
+            "network": "Default",
+        },
     ]
     assert console["networks"] == [
         {
@@ -122,6 +145,8 @@ async def test_overview_without_clients_and_lte_limit(
     await client.send_json_auto_id({"type": "network_plus/overview"})
     console_state = (await client.receive_json())["result"]["console"]
     assert console_state["remote"] is None
+    # Known clients from the history alone; a network the console does not list has no name
+    assert console_state["known_remote"][0]["name"] == "Old tablet"
     assert console_state["lte"][0]["limit_bytes"] is None
     assert console_state["lte"][0]["period_start"] is None
     # Without clients the networks are there, their clients unknown

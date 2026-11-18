@@ -217,10 +217,10 @@ def _history(now: datetime) -> dict[str, Any]:
             (10, 15.6, 14.1, 52_300_000),
         )
     ]
-    for day, hour, minutes, name in (
-        (3, 19, 95, "Travel tablet"),
-        (12, 8, 22, "Laptop"),
-        (27, 21, 140, "Travel tablet"),
+    for day, hour, minutes, name, down, up in (
+        (3, 19, 95, "Travel tablet", 2_310_000_000, 84_000_000),
+        (12, 8, 22, "Laptop", 152_000_000, 9_400_000),
+        (27, 21, 140, "Travel tablet", 3_050_000_000, 121_000_000),
     ):
         start = today - timedelta(days=day) + timedelta(hours=hour, minutes=6)
         sessions.append(
@@ -229,6 +229,8 @@ def _history(now: datetime) -> dict[str, Any]:
                 "until": iso(start + timedelta(minutes=minutes)),
                 "type": "TELEPORT",
                 "name": name,
+                "down_bytes": down,
+                "up_bytes": up,
             }
         )
     return {
@@ -631,7 +633,7 @@ INTEGRATION_PATH = "/config/integrations/integration/network_plus"
 AREAS = {
     "uplinks": ("status", "history"),
     "tests": ("speedtests", "drills"),
-    "remote": ("now", "sessions"),
+    "remote": ("now", "sessions", "devices"),
 }
 PAGES = [f"{area}/{page}" for area, pages in AREAS.items() for page in pages]
 # Home Assistant's elements the page uses; all of them on the list of STANDARD.md §7
@@ -856,11 +858,22 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
         await _goto(page, instance, "remote/now")
         text = await _text(page)
         expect("Desk" not in text, "a local client among the remote ones")
+        expect("1.84 GB" in text and "96 MB" in text, f"volume of the connected client: {text}")
+        expect("Default" in text, "the network of the connected client")
         await _goto(page, instance, "remote/sessions")
         text = await _text(page)
         expect("Travel tablet" in text and "Laptop" in text, "remote sessions missing")
+        expect("2.31 GB" in text and "152 MB" in text, "volume of the sessions missing")
+        await _goto(page, instance, "remote/devices")
+        text = await _text(page)
+        expect("Old phone" in text and "Travel tablet" in text, "known devices missing")
+        expect("Desk" not in text, "a local client among the known devices")
+        badges = await page.locator(f"{PANEL} ha-badge").all_inner_texts()
+        expect([b.strip() for b in badges] == ["connected"], f"connected badge {badges}")
 
-    await checks.run("Remote: the clients now and the finished sessions", remote)
+    await checks.run(
+        "Remote: the clients now with their volume, the sessions, the known devices", remote
+    )
 
     async def in_app_tabs() -> None:
         # The page's tab and Home Assistant's area tab navigate without a reload
@@ -1170,7 +1183,7 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
                 )
                 expect(overflow <= 0, f"{scheme}/{path}: page scrolls sideways by {overflow} px")
             # The areas in Home Assistant's bar at the bottom; stamp hidden, buttons shown
-            await _frame(phone, f"{scheme} phone", page_id="sessions", phone=True)
+            await _frame(phone, f"{scheme} phone", page_id=PAGES[-1].split("/")[-1], phone=True)
             expect(
                 await phone.locator(f"{PANEL} #refresh").is_visible()
                 and await phone.locator(f"{PANEL} #integration").is_visible(),

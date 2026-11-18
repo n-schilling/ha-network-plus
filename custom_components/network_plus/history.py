@@ -64,6 +64,9 @@ class History:
         self.drills: list[dict[str, Any]] = []
         self.sessions: list[dict[str, Any]] = []
         self._dirty = False
+        # Byte counts of open sessions changed since the last write: they change
+        # every minute, so they are written with the next change or at unload
+        self._bytes_pending = False
 
     async def async_load(self) -> None:
         """Read the stored history; an unreadable part starts empty."""
@@ -151,6 +154,7 @@ class History:
                 if session.get("key") != key:
                     session["key"] = key
                     changed = True
+                self._note_bytes(session, current[key])
             else:
                 session["until"] = now
                 changed = True
@@ -158,18 +162,25 @@ class History:
         for key, client in current.items():
             if key not in open_keys:
                 since = client.since.isoformat() if client.since else now
-                self.sessions.append(
-                    {
-                        "at": since,
-                        "until": None,
-                        "type": client.type,
-                        "name": client.name,
-                        "key": key,
-                    }
-                )
+                session = {
+                    "at": since,
+                    "until": None,
+                    "type": client.type,
+                    "name": client.name,
+                    "key": key,
+                }
+                self._note_bytes(session, client)
+                self.sessions.append(session)
                 changed = True
         if changed:
             self._changed()
+
+    def _note_bytes(self, session: dict[str, Any], client: VpnClient) -> None:
+        """Keep the bytes of an open session; the last ones before it ends are its volume."""
+        for field, value in (("down_bytes", client.down_bytes), ("up_bytes", client.up_bytes)):
+            if value is not None and session.get(field) != value:
+                session[field] = value
+                self._bytes_pending = True
 
     def as_dict(self) -> dict[str, Any]:
         """Return the history for the page, oldest first."""
@@ -187,9 +198,10 @@ class History:
 
     async def async_flush(self) -> None:
         """Write what is not written yet; on unload, so a reload does not lose it."""
-        if self._dirty:
+        if self._dirty or self._bytes_pending:
             await self._store.async_save(self._data())
             self._dirty = False
+            self._bytes_pending = False
 
     async def async_remove(self) -> None:
         """Delete the stored history, with the console's entry."""
@@ -204,6 +216,7 @@ class History:
     @callback
     def _saved(self) -> dict[str, Any]:
         self._dirty = False
+        self._bytes_pending = False
         return self._data()
 
     def _data(self) -> dict[str, Any]:

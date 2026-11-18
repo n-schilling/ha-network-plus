@@ -80,6 +80,8 @@ async def test_diagnostics_hold_nothing_personal(
         }
     ]
     assert result["vpn_clients"] == 1
+    assert result["known_remote"] == 2
+    assert "Old tablet" not in text
     wan = result["uplinks"][0]
     assert (wan["port"], wan["link_speed"], wan["full_duplex"]) == ("wan1", 2500, True)
     assert result["uplinks"][1]["port"] is None
@@ -112,6 +114,7 @@ async def test_diagnostics_without_networks_and_routes(
     result = await async_get_config_entry_diagnostics(hass, config_entry)
     assert result["networks"] is None
     assert result["pinned_routes"] is None
+    assert result["known_remote"] == 2
 
 
 async def test_diagnostics_hide_the_pinned_certificate(

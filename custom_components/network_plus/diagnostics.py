@@ -105,6 +105,7 @@ async def async_get_config_entry_diagnostics(
             for lte in (data.lte or {}).values()
         ],
         "vpn_clients": len(data.vpn_clients) if data.vpn_clients is not None else None,
+        "known_remote": len(data.known_remote) if data.known_remote is not None else None,
         # Without names: what each local network reaches, in order of the names
         "networks": None
         if data.networks is None

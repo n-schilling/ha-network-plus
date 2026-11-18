@@ -137,9 +137,19 @@ async def test_remote_sessions(
     """A remote client opens a session when it appears and closes it when it leaves."""
     history = _history(setup_entry)
     assert history.as_dict()["sessions"] == [
-        {"at": "2023-11-14T22:13:20+00:00", "until": None, "type": "TELEPORT", "name": "Phone"}
+        {
+            "at": "2023-11-14T22:13:20+00:00",
+            "until": None,
+            "type": "TELEPORT",
+            "name": "Phone",
+            "down_bytes": 3_000_000,
+            "up_bytes": 200_000,
+        }
     ]
-    console.clients = [teleport_client(), {"type": "VPN", "display_name": "Laptop"}]
+    console.clients = [
+        teleport_client(down=5_000_000, up=300_000),
+        {"type": "VPN", "display_name": "Laptop"},
+    ]
     freezer.tick(timedelta(minutes=1))
     await _poll(hass, setup_entry)
     joined = dt_util.utcnow().isoformat()
@@ -154,11 +164,42 @@ async def test_remote_sessions(
     await _poll(hass, setup_entry)
     left = dt_util.utcnow().isoformat()
     assert [s["until"] for s in history.sessions] == [left, left]
+    # A finished session keeps the last bytes read before it ended; a VPN without counters none
+    assert (history.sessions[0]["down_bytes"], history.sessions[0]["up_bytes"]) == (
+        5_000_000,
+        300_000,
+    )
+    assert "down_bytes" not in history.sessions[1]
     # A client that comes back opens a new session
     console.clients = [teleport_client(since=1_800_000_000)]
     await _poll(hass, setup_entry)
     assert len(history.sessions) == 3
     assert history.sessions[2]["until"] is None
+
+
+async def test_session_bytes_are_written_at_unload(
+    hass: HomeAssistant,
+    setup_entry: MockConfigEntry,
+    console: FakeConsole,
+    hass_storage: dict[str, Any],
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """New bytes of an open session wait for the next change, or the unload, to be written."""
+    key = storage_key(setup_entry.entry_id)
+    freezer.tick(timedelta(seconds=HISTORY_SAVE_DELAY + 1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    assert hass_storage[key]["data"]["sessions"][0]["down_bytes"] == 3_000_000
+    console.clients = [teleport_client(down=9_000_000)]
+    await _poll(hass, setup_entry)
+    freezer.tick(timedelta(seconds=HISTORY_SAVE_DELAY + 1))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    # Bytes alone schedule no write
+    assert hass_storage[key]["data"]["sessions"][0]["down_bytes"] == 3_000_000
+    await hass.config_entries.async_unload(setup_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass_storage[key]["data"]["sessions"][0]["down_bytes"] == 9_000_000
 
 
 async def test_remote_clients_not_readable(

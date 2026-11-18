@@ -4,6 +4,18 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-18
+
+### Added
+
+- **Remote › Connected now** shows per remote client the network it lands in and its download and upload since it connected, as the device sees them.
+- **Remote › Sessions** keeps the download and upload of every session: the last values read before it ended, so up to a minute may be missing. Sessions from before this version have none.
+- **Remote › Known devices**, a page of its own: every remote client the console knows, connected now or before, with its network and when it was last connected, so a forgotten device stands out. Read from the console's client history every 15 minutes.
+
+### Changed
+
+- The diagnostics count the known remote clients.
+
 ## [0.13.1] - 2026-11-18
 
 ### Changed

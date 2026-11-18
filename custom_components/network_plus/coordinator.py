@@ -38,6 +38,7 @@ from .api import (
 )
 from .const import (
     AUTH_FAILURES_FOR_REAUTH,
+    CLIENT_HISTORY_INTERVAL,
     CONF_AUTO_OFF_MINUTES,
     CONF_DRILL,
     CONF_ENFORCED_AT,
@@ -158,6 +159,9 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         # The local networks and the traffic routes, as last read; None: not yet
         self._networks: list[dict[str, Any]] | None = None
         self._routes: list[dict[str, Any]] | None = None
+        # The console's client history, for the known remote clients, and when it was read
+        self._client_history: list[dict[str, Any]] | None = None
+        self._client_history_at: datetime | None = None
         # Devices pushed since the poll started; the poll keeps their objects,
         # which are newer than its own snapshot
         self._pushed_macs: set[str] = set()
@@ -304,6 +308,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             if (mac := normalize_mac(raw.get("mac")))
         }
         await self._async_read_lte_reports()
+        await self._async_read_client_history()
         state = self._build()
         previous: NetworkState | None = self.data
         if previous is not None and _renamed(previous, state, self._configs):
@@ -329,6 +334,29 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
         if isinstance(result, BaseException):
             raise result
         return result  # type: ignore[no-any-return]
+
+    async def _async_read_client_history(self) -> None:
+        """Read the console's client history every quarter of an hour.
+
+        A failed read keeps the last one and is tried again with the next
+        poll; a console without this endpoint has no known remote clients.
+        """
+        now = dt_util.utcnow()
+        if (
+            self._client_history_at is not None
+            and now - self._client_history_at < CLIENT_HISTORY_INTERVAL
+        ):
+            return
+        try:
+            self._client_history = await self.client.get_client_history()
+        except NetworkAuthError as err:
+            raise self._poll_error(err) from err
+        except NetworkNotFoundError:
+            self._client_history = None
+        except NetworkError as err:
+            _LOGGER.debug("Client history not readable: %s", err)
+            return
+        self._client_history_at = now
 
     @property
     def lte_billing_day(self) -> int:
@@ -754,6 +782,7 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             self._clients,
             self._networks,
             self._routes,
+            self._client_history,
         )
         state = apply_billing(state, self._lte_reports, self._console_now(), self.lte_billing_day)
         return self._place_speedtest(state)

@@ -47,7 +47,7 @@ if (!customElements.get("network-plus-panel")) {
   const AREAS = [
     ["uplinks", "wan", "tabUplinks", [["status", "subStatus"], ["history", "subHistory"]]],
     ["tests", "speedometer", "tabTests", [["speedtests", "subSpeedtests"], ["drills", "subDrills"]]],
-    ["remote", "remote", "tabRemote", [["now", "subNow"], ["sessions", "subSessions"]]],
+    ["remote", "remote", "tabRemote", [["now", "subNow"], ["sessions", "subSessions"], ["devices", "subDevices"]]],
   ];
   // The addresses of the pages before the areas, as bookmarks still have them;
   // /uplinks and /remote are areas now and lead to their first page
@@ -87,6 +87,10 @@ if (!customElements.get("network-plus-panel")) {
       noRemote: "No remote client is connected.", remoteUnknown: "The console does not tell its remote clients.",
       name: "Name", kind: "Kind", from: "From", until: "Until", duration: "Duration",
       noSessions: "No finished session in the kept period.",
+      subDevices: "Known devices", lastConnected: "Last connected", connectedNow: "connected",
+      noKnown: "The console knows no remote client.", knownUnknown: "The console does not tell which remote clients it knows.",
+      knownHelp: "Every remote client the console knows, connected now or before, as the console's client history lists it (read every 15 minutes). A device that should not connect any more is withdrawn in UniFi Network.",
+      volumeHelp: "Download and upload as the device sees them. A finished session keeps the last values read before it ended, so up to a minute may be missing.",
       networks: "Networks", network: "Network", internet: "Internet now", clients: "Clients",
       carries: "carries it", notCarries: "does not carry it", noBackup: "no backup", withBackup: "with backup", redundancy: "Failover",
       networksHelp: "Whether each local network reaches the internet, now and over each uplink. A wired uplink carries every network; a cellular backup only the networks assigned to it in UniFi Network. A traffic route with kill switch binds a network to its target uplink. Failover: whether a second uplink carries the network, whatever is online now; an exclamation mark if only one does. Clients: connected now.",
@@ -123,6 +127,10 @@ if (!customElements.get("network-plus-panel")) {
       noRemote: "Kein Fernzugriff verbunden.", remoteUnknown: "Die Konsole meldet ihre Fernzugriffe nicht.",
       name: "Name", kind: "Art", from: "Von", until: "Bis", duration: "Dauer",
       noSessions: "Keine beendete Sitzung im aufbewahrten Zeitraum.",
+      subDevices: "Bekannte Geräte", lastConnected: "Zuletzt verbunden", connectedNow: "verbunden",
+      noKnown: "Die Konsole kennt keinen Fernzugriff.", knownUnknown: "Die Konsole meldet nicht, welche Fernzugriffe sie kennt.",
+      knownHelp: "Jeder Fernzugriff, den die Konsole kennt, jetzt oder früher verbunden, wie ihre Client-Historie ihn führt (alle 15 Minuten gelesen). Ein Gerät, das sich nicht mehr verbinden soll, wird in UniFi Network entzogen.",
+      volumeHelp: "Download und Upload aus Sicht des Geräts. Eine beendete Sitzung behält die letzten Werte vor ihrem Ende, es kann also bis zu einer Minute fehlen.",
       networks: "Netze", network: "Netz", internet: "Internet jetzt", clients: "Clients",
       carries: "versorgt es", notCarries: "versorgt es nicht", noBackup: "ohne Reserve", withBackup: "mit Reserve", redundancy: "Ausfallsicherheit",
       networksHelp: "Ob jedes lokale Netz ins Internet kommt, jetzt und über jede Leitung. Eine Kabel-Leitung versorgt alle Netze, eine Mobilfunk-Reserve nur die Netze, die ihr in UniFi Network zugewiesen sind. Eine Traffic Route mit Kill Switch bindet ein Netz an ihre Ziel-Leitung. Ausfallsicherheit: ob eine zweite Leitung das Netz versorgt, egal was gerade online ist; ein Ausrufezeichen, wenn nur eine es tut. Clients: gerade verbunden.",
@@ -479,6 +487,7 @@ if (!customElements.get("network-plus-panel")) {
         case "drills": return this._drills(c);
         case "now": return this._remoteNow(c);
         case "sessions": return this._sessions(c);
+        case "devices": return this._known(c);
         default: return this._status(c);
       }
     }
@@ -769,22 +778,40 @@ if (!customElements.get("network-plus-panel")) {
       if (c.remote == null) current = `<div class="muted">${esc(this._t("remoteUnknown"))}</div>`;
       else if (!c.remote.length) current = `<div class="muted">${esc(this._t("noRemote"))}</div>`;
       else {
-        current = `<div class="scroll"><table class="data"><tr><th>${esc(this._t("name"))}</th><th>${esc(this._t("kind"))}</th><th>${esc(this._t("from"))}</th><th class="n">${esc(this._t("duration"))}</th></tr>` +
-          c.remote.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.type)}</td><td>${esc(this._when(r.since))}</td>` +
-            `<td class="n">${esc(this._duration((now - time(r.since)) / 1000))}</td></tr>`).join("") + `</table></div>`;
+        current = `<div class="scroll"><table class="data"><tr><th>${esc(this._t("name"))}</th><th>${esc(this._t("kind"))}</th><th>${esc(this._t("network"))}</th><th>${esc(this._t("from"))}</th><th class="n">${esc(this._t("duration"))}</th>` +
+          `<th class="n">↓ ${esc(this._t("download"))}</th><th class="n">↑ ${esc(this._t("upload"))}</th></tr>` +
+          c.remote.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.type)}</td><td>${esc(r.network || "–")}</td><td>${esc(this._when(r.since))}</td>` +
+            `<td class="n">${esc(this._duration((now - time(r.since)) / 1000))}</td>` +
+            `<td class="n">${this._bytes(r.down_bytes)}</td><td class="n">${this._bytes(r.up_bytes)}</td></tr>`).join("") + `</table></div>`;
       }
-      return this._card(esc(this._t("subNow")), current);
+      return this._card(esc(this._t("subNow")), current, c.remote?.length ? this._t("volumeHelp") : "");
     }
 
     // Remote › Sessions: the finished ones
     _sessions(c) {
       const closed = c.history.sessions.filter((s) => s.until).reverse();
       const sessions = closed.length
-        ? `<div class="scroll"><table class="data"><tr><th>${esc(this._t("name"))}</th><th>${esc(this._t("kind"))}</th><th>${esc(this._t("from"))}</th><th>${esc(this._t("until"))}</th><th class="n">${esc(this._t("duration"))}</th></tr>` +
+        ? `<div class="scroll"><table class="data"><tr><th>${esc(this._t("name"))}</th><th>${esc(this._t("kind"))}</th><th>${esc(this._t("from"))}</th><th>${esc(this._t("until"))}</th><th class="n">${esc(this._t("duration"))}</th>` +
+          `<th class="n">↓ ${esc(this._t("download"))}</th><th class="n">↑ ${esc(this._t("upload"))}</th></tr>` +
           closed.map((s) => `<tr><td>${esc(s.name)}</td><td>${esc(s.type)}</td><td>${esc(this._when(s.at))}</td><td>${esc(this._when(s.until))}</td>` +
-            `<td class="n">${esc(this._duration((time(s.until) - time(s.at)) / 1000))}</td></tr>`).join("") + `</table></div>`
+            `<td class="n">${esc(this._duration((time(s.until) - time(s.at)) / 1000))}</td>` +
+            `<td class="n">${this._bytes(s.down_bytes)}</td><td class="n">${this._bytes(s.up_bytes)}</td></tr>`).join("") + `</table></div>`
         : `<div class="muted">${esc(this._t("noSessions"))}</div>`;
-      return this._card(esc(this._t("subSessions")), sessions, this._t("kept", { n: this._num(c.history.days) }));
+      const help = `${this._t("kept", { n: this._num(c.history.days) })} ${this._t("volumeHelp")}`;
+      return this._card(esc(this._t("subSessions")), sessions, help);
+    }
+
+    // Remote › Known devices: every remote client the console knows, connected ones first
+    _known(c) {
+      let body;
+      if (c.known_remote == null) body = `<div class="muted">${esc(this._t("knownUnknown"))}</div>`;
+      else if (!c.known_remote.length) body = `<div class="muted">${esc(this._t("noKnown"))}</div>`;
+      else {
+        body = `<div class="scroll"><table class="data"><tr><th>${esc(this._t("name"))}</th><th>${esc(this._t("kind"))}</th><th>${esc(this._t("network"))}</th><th>${esc(this._t("lastConnected"))}</th></tr>` +
+          c.known_remote.map((k) => `<tr><td>${esc(k.name)}</td><td>${esc(k.type)}</td><td>${esc(k.network || "–")}</td>` +
+            `<td>${k.connected ? this._badge(this._t("connectedNow"), "ok", "ok") : esc(k.last_seen ? this._when(k.last_seen) : "–")}</td></tr>`).join("") + `</table></div>`;
+      }
+      return this._card(esc(this._t("subDevices")), body, this._t("knownHelp"));
     }
   }
 
