@@ -1,6 +1,6 @@
 # Network Plus
 
-[![Marketplace: custom](https://img.shields.io/badge/Marketplace-custom-41BDF5.svg)](#installation)
+[![Marketplace: default](https://img.shields.io/badge/Marketplace-default-41BDF5.svg)](#installation)
 
 A Home Assistant integration that adds what the UniFi integration shipped with Home Assistant does not show: uplink status and failover, latency, buttons to run a speed test, also over the backup uplink, the LTE data plan and a page of its own with the uplinks' details and the history of failovers, speed tests, backup drills and remote sessions. It complements that integration, it does not replace it. This project is not affiliated with or endorsed by Ubiquiti.
 
@@ -506,13 +506,35 @@ Of an LTE backup device:
 
 ## Installation
 
-1. **Settings → Marketplace → Add from link** (top right), enter `https://github.com/n-schilling/ha-network-plus` as GitHub link and add it. Adding a repository by link asks you to connect GitHub once.
-2. Install **Network Plus** in the Marketplace and restart Home Assistant.
-3. **Settings → Devices & services → Add integration → Network Plus.**
-
-Requires Home Assistant 2026.11 or later. Without the Marketplace, copy `custom_components/network_plus` into the `custom_components` folder of your configuration directory and restart. There are no requirements outside Home Assistant.
+Network Plus is part of the official catalog of the [Home Assistant Marketplace](https://www.home-assistant.io/integrations/marketplace/): you find it there by its name, with nothing to add first. There are three ways to install it, and each one is complete in itself. All need Home Assistant 2026.11 or later.
 
 You need a UniFi OS console with a gateway (Dream Machine, Cloud Gateway, UXG) and UniFi Network 10, and a local user of the console; the read-only role is enough. Accounts of UI.com do not work. Developed against a Dream Machine with UniFi Network 10.
+
+### Easy installation
+
+Through the search in the Marketplace, the way for almost everyone.
+
+1. Open **Settings → Marketplace** and search for **Network Plus**.
+2. Install it and restart Home Assistant.
+3. **Settings → Devices & services → Add integration → Network Plus.**
+
+### Alternative installation
+
+By the link of the repository, if the search does not show Network Plus.
+
+1. Open **Settings → Marketplace → Add from link** (top right), enter `https://github.com/n-schilling/ha-network-plus` as GitHub link and add it. This asks you to connect GitHub once.
+2. Install **Network Plus** and restart Home Assistant.
+3. **Settings → Devices & services → Add integration → Network Plus.**
+
+### Fully manual installation
+
+Without the Marketplace, by copying the files yourself. Home Assistant then does not tell you about new versions: to update, repeat steps 1 to 4 with the newer release.
+
+1. Open the [latest release](https://github.com/n-schilling/ha-network-plus/releases/latest) and download **Source code (zip)**.
+2. Unpack it. Inside is the folder `custom_components/network_plus`.
+3. Copy the folder `network_plus` into the `custom_components` folder of your configuration directory, the one that holds `configuration.yaml`, so that it ends up as `custom_components/network_plus`. Create `custom_components` if it does not exist yet.
+4. Restart Home Assistant.
+5. **Settings → Devices & services → Add integration → Network Plus.**
 
 ### Installation parameters
 
@@ -529,7 +551,7 @@ The entry is named after the gateway. Reconfigure changes the address, the user,
 
 ### Removal
 
-**Settings → Devices & services → Network Plus → ⋮ → Delete** removes the console, its devices and entities and its history; the page goes with the last console. Then remove the integration in the Marketplace and restart. Nothing is left on the console: without the admin opt-in the integration never writes to it, and with it the switch only changes the WAN type of the preferred uplink, which it restores when switched off.
+**Settings → Devices & services → Network Plus → ⋮ → Delete** removes the console, its devices and entities and its history; the page goes with the last console. Then remove the integration in the Marketplace and restart. After a fully manual installation, delete the folder `custom_components/network_plus` instead and restart. Nothing is left on the console: without the admin opt-in the integration never writes to it, and with it the switch only changes the WAN type of the preferred uplink, which it restores when switched off.
 
 ## Development
 
