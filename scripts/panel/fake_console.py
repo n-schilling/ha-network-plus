@@ -73,6 +73,11 @@ class FakeConsole:
         self.ipv4 = ipv4
         self.ipv6 = ipv6
         self.wan_type = "dhcp"
+        # A check pulls the cable (False), or lets an uplink switched off in the
+        # configuration move the traffic to the cellular backup, as a real gateway does
+        self.cable = True
+        self.fails_over = False
+        self.switched_at: int | None = None
         self.port = 0
         self.fingerprint = ""
         # Fixed when the console starts: a run time that moves looks like a new test
@@ -81,8 +86,19 @@ class FakeConsole:
 
     # The runtime objects, in the shape stat/device and the websocket send
 
+    @property
+    def on_backup(self) -> bool:
+        """Whether the cellular backup carries the traffic."""
+        return not self.cable or (self.fails_over and self.wan_type == "disabled")
+
+    def switch(self) -> None:
+        """Note the moment the traffic moved, as the gateway reports it."""
+        self.switched_at = int(time.time())
+
     def gateway(self) -> dict[str, Any]:
         now = self.started
+        backup = self.on_backup
+        wan = "disabled" if self.wan_type == "disabled" else "online" if self.cable else "offline"
         return {
             "mac": self.mac,
             "type": "udm",
@@ -90,7 +106,7 @@ class FakeConsole:
             "name": self.name,
             "version": "4.0.0",
             "last_wan_status": {
-                "WAN": "online" if self.wan_type != "disabled" else "disabled",
+                "WAN": wan,
                 "WAN_LTE_FAILOVER": "online",
             },
             "last_wan_interfaces": {"WAN": {"ip": self.ipv4, "alive": True}},
@@ -104,9 +120,9 @@ class FakeConsole:
                 "max_speed": 10000,
             },
             "uplink": {
-                "comment": "WAN",
-                "name": "eth8",
-                "latency": 12,
+                "comment": "WAN_LTE_FAILOVER" if backup else "WAN",
+                "name": "gre1" if backup else "eth8",
+                "latency": 48 if backup else 12,
                 "speedtest_lastrun": now - 3 * 3600,
                 "speedtest_ping": 9,
                 "speedtest_status": "Success",
@@ -130,7 +146,7 @@ class FakeConsole:
                 "xput_upload": 48.7,
                 "latency": 9,
             },
-            "last_lte_failover_transition_timestamp": (now - 6 * 86400) * 1000,
+            "last_lte_failover_transition_timestamp": (self.switched_at or now - 6 * 86400) * 1000,
         }
 
     def lte(self) -> dict[str, Any]:
@@ -142,7 +158,7 @@ class FakeConsole:
             "version": "6.0.0",
             "lte_state": "ready",
             "lte_connected": "yes",
-            "lte_failover": False,
+            "lte_failover": self.on_backup,
             "rx_bytes": 1_610_000_000,
             "tx_bytes": 230_000_000,
             "lte_hard_limit": 10_000_000_000,
@@ -313,6 +329,8 @@ class FakeConsole:
             return web.Response(status=403)
         if request.match_info["id"] == "net-wan":
             self.wan_type = str((await request.json()).get("wan_type"))
+            if self.fails_over:
+                self.switch()
         return web.json_response({"meta": {"rc": "ok"}, "data": []})
 
     async def _command(self, request: web.Request) -> web.Response:

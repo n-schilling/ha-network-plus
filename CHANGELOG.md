@@ -4,6 +4,18 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-26
+
+### Added
+
+- **A dashboard card for every user**: "Network Plus" in the card picker shows whether the internet works, over which connection, which networks are cut off, the connections and the mobile data used, in the words of a resident ("Main line", "Mobile backup") rather than the names in UniFi Network; those names, the response time and the last change can be switched on. It only reads entities and changes nothing; every part can be switched on or off, and the card draws itself large, medium or small by the space it gets. Home Assistant loads it by itself and keeps it in the dashboard resources. See the README, section "The card".
+- Sensor **"Active uplink since"**: when the active uplink took over. Unlike "last changed" of the active uplink, it survives a restart of Home Assistant.
+- The sensor "Active uplink" lists the uplinks and the local networks with the entity of each in the attributes `uplinks` and `networks`, for cards and dashboards. Both are not recorded.
+
+### Changed
+
+- README, Dashboard: the example showed "last changed" as the time the uplink has carried the traffic, which starts anew with every restart of Home Assistant; it now uses the new sensor.
+
 ## [0.14.1] - 2026-11-23
 
 ### Changed

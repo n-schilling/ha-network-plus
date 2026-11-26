@@ -40,6 +40,9 @@
       },
       "lte_signal": {
         "default": "mdi:signal-cellular-2"
+      },
+      "active_uplink_since": {
+        "default": "mdi:clock-start"
       }
     },
     "switch": {

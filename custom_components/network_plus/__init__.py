@@ -32,7 +32,12 @@ from .const import (
 )
 from .coordinator import NetworkConfigEntry, NetworkCoordinator, RuntimeData
 from .entity import gateway_device_info
-from .frontend import async_register_frontend, async_unregister_panel
+from .frontend import (
+    async_register_card,
+    async_register_frontend,
+    async_remove_card_resource,
+    async_unregister_panel,
+)
 from .history import History
 from .websocket import async_register_websocket
 
@@ -124,6 +129,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> b
         entry.async_on_unload(coordinator.cancel_auto_off)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await async_register_frontend(hass)
+    await async_register_card(hass)
     entry.async_create_background_task(hass, coordinator.async_listen(), "network_plus websocket")
     return True
 
@@ -154,11 +160,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> 
 async def async_remove_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> None:
     """Drop the history and the repair issues of a console that was removed.
 
-    The page goes with the last console.
+    The page and the card's dashboard resource go with the last console.
     """
     await History(hass, entry.entry_id, DEFAULT_HISTORY_DAYS).async_remove()
     if not hass.config_entries.async_entries(DOMAIN):
         async_unregister_panel(hass)
+        await async_remove_card_resource(hass)
     registry = ir.async_get(hass)
     for domain, issue_id in list(registry.issues):
         if domain == DOMAIN and issue_id.endswith(entry.entry_id):

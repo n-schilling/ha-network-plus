@@ -96,6 +96,9 @@ PANEL_TITLE: Final = "Network Plus"
 FRONTEND_URL_BASE: Final = "/network_plus"
 PANEL_FILENAME: Final = "network-plus-panel.js"
 
+# The dashboard card, for every user
+CARD_FILENAME: Final = "network-plus-card.js"
+
 # Options: the link speed a WAN port should negotiate, in Mbit/s, by network group
 EXPECTED_SPEED_OPTIONS: Final[dict[str, str]] = {
     "WAN": "expected_speed_wan",

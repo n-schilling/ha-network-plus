@@ -148,6 +148,9 @@
           "wan4": "WAN 4"
         }
       },
+      "active_uplink_since": {
+        "name": "Active uplink since"
+      },
       "internet_latency": {
         "name": "Internet latency"
       },

@@ -11,7 +11,9 @@ active) and the menu button, the page's own tab, stamp, refresh and the
 integration button; the areas at the bottom on a phone, no sideways scrolling;
 old addresses and a change of the query alone; every (i); an error as one line
 with the message behind its (i); numbers in the profile's format (a decimal
-comma, German); refresh; the integration button. The page has no settings, no
+comma, German); refresh; the integration button; the dashboard card for a user
+without administrator rights, in its sizes, in the states of a failover made up
+in the page, and through a failover and a drill of the made-up console. The page has no settings, no
 subpages and no drawing, so there are no settings rows, no save button and no
 arrow keys to check. Home Assistant is stopped through its own stop action at
 the end, also after a failure.
@@ -60,6 +62,8 @@ TIME_ZONE = ZoneInfo("Europe/Berlin")
 ADMIN = ("admin", "panel-check-admin")
 USER = ("user", "panel-check-user")
 PANEL = "network-plus-panel"
+CARD = "network-plus-card"
+DASHBOARD = "internet-cards"
 # An iPhone's safe area (47 px above, 34 px below), as Home Assistant's debug setting sets it
 SAFE_AREA = """() => {
   const style = document.createElement('style');
@@ -373,6 +377,7 @@ class Instance:
         await self._add_consoles(api)
         await self._seed_history(api)
         await self._add_user(api)
+        await self._add_dashboard(api)
         return api
 
     async def _wait_ready(self, session: aiohttp.ClientSession) -> None:
@@ -525,6 +530,79 @@ class Instance:
                 "password": USER[1],
             },
         )
+
+    async def _add_dashboard(self, api: Api) -> None:
+        """A dashboard with the card: as it comes, for the second console, and in three sizes."""
+        devices = await api.ws(self.token, {"type": "config/device_registry/list"})
+        office = next(
+            device["id"]
+            for device in devices["result"]
+            if device["name"] == "Office" and self.entry_ids["Office"] in device["config_entries"]
+        )
+        card = {"type": f"custom:{CARD}"}
+        created = await api.ws(
+            self.token,
+            {
+                "type": "lovelace/dashboards/create",
+                "url_path": DASHBOARD,
+                "title": "Internet",
+                "mode": "storage",
+            },
+        )
+        if not created["success"]:
+            raise RuntimeError(f"Dashboard not created: {created}")
+        saved = await api.ws(
+            self.token,
+            {
+                "type": "lovelace/config/save",
+                "url_path": DASHBOARD,
+                "config": {
+                    "views": [
+                        {
+                            "path": "large",
+                            "title": "Large",
+                            "cards": [
+                                card,
+                                {
+                                    **card,
+                                    "title": "Office",
+                                    "device": office,
+                                    "show_networks": False,
+                                    "show_names": True,
+                                    "show_latency": True,
+                                    "show_last_switch": True,
+                                    "show_problems": True,
+                                },
+                            ],
+                        },
+                        {
+                            "path": "sizes",
+                            "title": "Sizes",
+                            "type": "sections",
+                            "sections": [
+                                {
+                                    "type": "grid",
+                                    "cards": [
+                                        {**card, "grid_options": {"columns": 12, "rows": rows}}
+                                        for rows in (1, 3, 6)
+                                    ],
+                                },
+                                {
+                                    "type": "grid",
+                                    "cards": [
+                                        # As it comes, and half as wide in one row
+                                        card,
+                                        {**card, "grid_options": {"columns": 6, "rows": 1}},
+                                    ],
+                                },
+                            ],
+                        },
+                    ]
+                },
+            },
+        )
+        if not saved["success"]:
+            raise RuntimeError(f"Dashboard not saved: {saved}")
 
     async def stop(self, session: aiohttp.ClientSession) -> None:
         """Stop through Home Assistant's own stop action; force only if that fails."""
@@ -1246,6 +1324,354 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
 
     await checks.run(
         "iPhone safe area: header and bottom bar as on Home Assistant's own pages", iphone_safe_area
+    )
+
+    async def card_at(card_page: Page, view: str) -> Any:
+        await card_page.goto(f"{instance.base}/{DASHBOARD}/{view}")
+        cards = card_page.locator(CARD)
+        await cards.first.locator("ha-card").wait_for(timeout=90000)
+        await card_page.locator("#ha-launch-screen").wait_for(state="detached")
+        return cards
+
+    # A card made in the page from a changed copy of the user's hass: the failover
+    # to the cellular backup, which the guest network is not assigned to
+    changed_card = f"""(change) => {{
+      const real = document.querySelector('home-assistant').hass;
+      const own = Object.values(real.entities).filter((e) => e.platform === 'network_plus');
+      const gateway = own.filter((e) => e.translation_key === 'active_uplink')
+        .sort((a, b) => a.entity_id.localeCompare(b.entity_id))[0];
+      const states = {{ ...real.states }};
+      const set = (id, state, attributes = {{}}) => {{
+        states[id] = {{ ...states[id], state, attributes: {{ ...states[id].attributes, ...attributes }} }};
+      }};
+      const of = (key) => own.find((e) => e.translation_key === key && e.device_id === gateway.device_id);
+      const lists = real.states[gateway.entity_id].attributes;
+      const [wan, lte] = lists.uplinks;
+      const guest = lists.networks.find((n) => n.name === 'Guest');
+      set(wan.entity_id, 'off');
+      if (change.offline) set(lte.entity_id, 'off');
+      set(gateway.entity_id, change.offline ? 'unknown' : lte.key);
+      set(of('backup_active').entity_id, change.offline ? 'unknown' : 'on');
+      set(of('active_uplink_since').entity_id, '2026-01-05T09:30:00+00:00');
+      set(guest.entity_id, 'off');
+      if (change.drill) set(of('enforce_backup').entity_id, 'on');
+      const card = document.createElement('{CARD}');
+      card.setConfig({{ size: change.size }});
+      document.body.appendChild(card);
+      card.hass = {{ ...real, states }};
+      const root = card.shadowRoot;
+      const text = (selector) => [...root.querySelectorAll(selector)].map((el) => el.textContent.trim());
+      const result = {{
+        lines: JSON.parse(root.querySelector('.small .sub')?.dataset.lines || '[]'),
+        pill: text('.pill')[0],
+        tone: root.querySelector('.head, .small').className,
+        warnings: text('.row .value.warning').length,
+        line: text('.line.warning'),
+        data: text('.details .row .name'),
+      }};
+      card.remove();
+      return result;
+    }}"""
+
+    async def card_for_every_user() -> None:
+        # A user without administrator rights: the card reads entities only
+        card_page = await _open(browser, instance, USER)
+        try:
+            cards = await card_at(card_page, "large")
+            first = cards.nth(0)
+            await first.locator(".details").wait_for()
+            expect((await first.locator(".title").inner_text()).strip() == "Internet", "the title")
+            expect(
+                (await first.locator(".pill").inner_text()).strip() == "Internet is working",
+                "the state",
+            )
+            expect("warning" not in await first.locator(".head").get_attribute("class"), "a colour")
+            names = await first.locator(".row .name").all_inner_texts()
+            expect(
+                names == ["Main line", "Mobile backup", "Default", "Guest", "Mobile data"],
+                f"the large card's rows: {names}",
+            )
+            expect(await first.locator(".row .tag").all_inner_texts() == ["in use"], "one in use")
+            # Home Assistant writes a no-break space before a unit
+            values = [
+                value.replace("\xa0", " ")
+                for value in await first.locator(".row .value").all_inner_texts()
+            ]
+            expect(
+                values[:4] == ["Connected"] * 4, f"the states in Home Assistant's words: {values}"
+            )
+            expect(values[4] == "18.4% of 10.0 GB used", f"the backup's data: {values[4]}")
+            expect(await first.locator(".value.warning, .line").count() == 0, "a warning at rest")
+            expect(
+                await first.locator("button, ha-button, input, select").count() == 0,
+                "the card has something to change",
+            )
+            # A row opens Home Assistant's dialog of its entity, nothing else
+            await first.locator(".row").first.click()
+            await card_page.locator("ha-more-info-dialog").wait_for(state="attached")
+            await card_page.keyboard.press("Escape")
+            # The second console by its device, with a title and without the networks
+            second = cards.nth(1)
+            expect((await second.locator(".title").inner_text()).strip() == "Office", "the title")
+            expect(
+                "office" in str(await second.locator(".row").first.get_attribute("data-entity")),
+                "the card of the second console shows the first",
+            )
+            expect(
+                await second.locator(".label").all_inner_texts() == ["Connections"],
+                "the networks, switched off",
+            )
+            names = await second.locator(".row .name").all_inner_texts()
+            expect(
+                names == ["WAN", "LTE Failover WAN", "Mobile data", "Response time", "Last change"],
+                f"the names from UniFi Network and the parts switched on: {names}",
+            )
+            latency = (await second.locator(".row .value").nth(3).inner_text()).replace("\xa0", " ")
+            expect(latency == "12 ms", f"the response time: {latency}")
+            # The card picker knows the card, and its editor has a field for every option
+            offered = await card_page.evaluate(
+                f"""() => {{
+                  const form = customElements.get('{CARD}').getConfigForm();
+                  const names = (schema) => schema.flatMap((f) => f.schema ? names(f.schema) : [f.name]);
+                  return {{
+                    picker: (window.customCards || []).filter((c) => c.type === '{CARD}').length,
+                    fields: names(form.schema),
+                    labels: names(form.schema).map((name) => form.computeLabel({{ name }})),
+                  }};
+                }}"""
+            )
+            expect(offered["picker"] == 1, "the card is not in the card picker once")
+            expect(
+                set(offered["fields"])
+                >= {
+                    "title",
+                    "size",
+                    "device",
+                    "show_status",
+                    "show_names",
+                    "show_data",
+                    "show_problems",
+                },
+                f"the editor's fields: {offered['fields']}",
+            )
+            expect(
+                not set(offered["fields"]) & set(offered["labels"]),
+                f"an editor field without its text: {offered['labels']}",
+            )
+            # What does not fit is left out: one row, three rows, six rows
+            cards = await card_at(card_page, "sizes")
+            small, medium, large = cards.nth(0), cards.nth(1), cards.nth(2)
+            await large.locator(".details").wait_for()
+            expect(await small.locator(".small").count() == 1, "one row is not the small card")
+            expect(
+                (await small.locator(".small .sub").inner_text()).strip() == "Internet is working",
+                "the small card's second line",
+            )
+            expect(
+                await medium.locator(".label").all_inner_texts() == ["Connections"],
+                "three rows are not the medium card",
+            )
+            expect(await medium.locator(".details").count() == 0, "three rows with the details")
+            expect(await large.locator(".label").count() == 2, "six rows without the networks")
+            for card in (small, medium, large):
+                fits = await card.locator("ha-card").evaluate(
+                    "el => el.querySelector('.content').getBoundingClientRect().bottom"
+                    " <= el.getBoundingClientRect().bottom + 1"
+                )
+                expect(fits, "a card that cuts off what it shows")
+            # Given no rows, a card is as high as what it shows
+            plain = cards.nth(3)
+            await plain.locator(".details").wait_for()
+            spare = await plain.evaluate(
+                "el => { const card = el.shadowRoot.querySelector('ha-card');"
+                " const style = getComputedStyle(card);"
+                " return card.clientHeight - parseFloat(style.paddingTop)"
+                " - parseFloat(style.paddingBottom)"
+                " - card.querySelector('.content').scrollHeight; }"
+            )
+            expect(abs(spare) <= 2, f"a card without rows is {spare} px off its content")
+            # Half as wide in one row, the second line is not cut off
+            narrow = cards.nth(4).locator(".small .sub")
+            cut = await narrow.evaluate("el => el.scrollWidth > el.clientWidth")
+            expect(not cut, "a second line that is cut off")
+            if shots is not None:
+                await card_page.mouse.move(0, 0)
+                await card_page.wait_for_timeout(500)
+                await card_page.locator("hui-grid-section").first.screenshot(
+                    path=str(shots / "card.png")
+                )
+            # On the cellular backup: a warning, the guest network cut off, the time it began
+            backup = await card_page.evaluate(changed_card, {"size": "small"})
+            expect(
+                backup["lines"][0].startswith(
+                    "Running on mobile data · Guest without internet · since "
+                )
+                and backup["lines"][-1] == "Running on mobile data",
+                f"the one row on the backup: {backup['lines']}",
+            )
+            expect("warning" in backup["tone"], "the backup without its colour")
+            backup = await card_page.evaluate(changed_card, {"size": "large"})
+            expect(
+                backup["pill"].startswith("Running on mobile data · since "),
+                f"the state: {backup['pill']}",
+            )
+            expect(backup["warnings"] == 2, "the uplink that is down and the network cut off")
+            backup = await card_page.evaluate(changed_card, {"size": "medium"})
+            expect(backup["line"] == ["Guest without internet"], f"the medium card: {backup}")
+            expect(backup["data"] == ["Mobile data"], "the backup's data while it is used up")
+            # A backup switched on by hand is a drill, and no warning
+            drill = await card_page.evaluate(changed_card, {"size": "large", "drill": True})
+            expect(
+                drill["pill"].startswith("Test: running on mobile data"),
+                f"the drill: {drill['pill']}",
+            )
+            expect("warning" not in drill["tone"], "a drill as a warning")
+            # Every uplink down
+            offline = await card_page.evaluate(changed_card, {"size": "large", "offline": True})
+            expect(offline["pill"] == "No internet", f"every uplink down: {offline['pill']}")
+            expect("error" in offline["tone"], "no internet without its colour")
+        finally:
+            await card_page.context.close()
+
+    await checks.run(
+        "the card shows every user the internet, in the size its space allows, nothing to change",
+        card_for_every_user,
+    )
+
+    async def card_through_a_failover() -> None:
+        # The real thing, as far as a made-up console goes: the cable pulled, the traffic
+        # on the cellular backup, which the guest network is not assigned to, and back;
+        # then the same switched on by hand, a drill
+        console = instance.consoles[0]
+        states = await api.ws(instance.token, {"type": "get_states"})
+        switch = next(
+            s["entity_id"]
+            for s in states["result"]
+            if s["entity_id"].startswith("switch.gateway") and "enforce" in s["entity_id"]
+        )
+        card_page = await _open(browser, instance, USER)
+
+        async def poll() -> None:
+            await api.post(
+                instance.token,
+                "/api/services/homeassistant/update_entity",
+                {"entity_id": "sensor.gateway_active_uplink"},
+            )
+
+        async def shows(card: Any, start: str) -> None:
+            """The card's state begins with ``start``; the next poll is asked for meanwhile."""
+
+            async def there() -> bool:
+                if (await card.locator(".pill").inner_text()).strip().startswith(start):
+                    return True
+                await poll()
+                return False
+
+            await _until(there, f"the card to say {start!r}", 90)
+
+        async def rows(card: Any) -> dict[str, tuple[str, bool]]:
+            found = {}
+            for row in await card.locator(".row").all():
+                value = row.locator(".value")
+                found[(await row.locator(".name").inner_text()).strip()] = (
+                    (await value.inner_text()).strip(),
+                    "warning" in str(await value.get_attribute("class")),
+                )
+            return found
+
+        try:
+            cards = await card_at(card_page, "large")
+            card = cards.nth(0)
+            await shows(card, "Internet is working")
+            console.cable = False
+            console.switch()
+            await shows(card, "Running on mobile data · since ")
+            expect(
+                "warning" in str(await card.locator(".head").get_attribute("class")), "no colour"
+            )
+            found = await rows(card)
+            expect(found["Main line"] == ("Disconnected", True), f"the cable: {found['Main line']}")
+            expect(
+                found["Mobile backup"] == ("Connected", False),
+                f"the backup: {found['Mobile backup']}",
+            )
+            expect(found["Guest"] == ("Disconnected", True), f"the guests: {found['Guest']}")
+            expect(found["Default"] == ("Connected", False), f"the home: {found['Default']}")
+            tagged = await card.locator(".row:has(.tag) .name").all_inner_texts()
+            expect(tagged == ["Mobile backup"], f"the active uplink: {tagged}")
+            if shots is not None:
+                await card_page.mouse.move(0, 0)
+                await card_page.wait_for_timeout(500)
+                await card.locator("ha-card").screenshot(path=str(shots / "card-backup.png"))
+            # The same in three rows and in one
+            sized = await card_at(card_page, "sizes")
+            small, medium = sized.nth(0), sized.nth(1)
+            line = (await small.locator(".small .sub").inner_text()).strip()
+            expect(
+                line.startswith("Running on mobile data · Guest without internet"),
+                f"the one row: {line}",
+            )
+            expect(
+                (await medium.locator(".line.warning").inner_text()).strip()
+                == "Guest without internet",
+                "the medium card without the network that is cut off",
+            )
+            # Three rows have no room for the backup's data as well; a card without rows has
+            expect(await medium.locator(".row").count() == 2, "the medium card's uplinks")
+            expect(await medium.locator(".details").count() == 0, "three rows with the data")
+            for sized_card in (small, medium):
+                fits = await sized_card.locator("ha-card").evaluate(
+                    "el => el.querySelector('.content').getBoundingClientRect().bottom"
+                    " <= el.getBoundingClientRect().bottom + 1"
+                )
+                expect(fits, "a card on the backup that cuts off what it shows")
+            # The cable back in
+            cards = await card_at(card_page, "large")
+            card = cards.nth(0)
+            console.cable = True
+            console.switch()
+            await shows(card, "Internet is working")
+            expect(await card.locator(".value.warning").count() == 0, "a warning left behind")
+            expect("warning" not in str(await card.locator(".head").get_attribute("class")), "")
+            # A drill: the preferred uplink switched off by an administrator
+            console.fails_over = True
+            await api.post(instance.token, "/api/services/switch/turn_on", {"entity_id": switch})
+            await shows(card, "Test: running on mobile data · since ")
+            expect(
+                "warning" not in str(await card.locator(".head").get_attribute("class")),
+                "a drill as a warning",
+            )
+            found = await rows(card)
+            expect(
+                not found["Main line"][1],
+                f"the uplink switched off for the drill: {found['Main line']}",
+            )
+            expect(found["Guest"] == ("Disconnected", True), f"the guests: {found['Guest']}")
+            await api.post(instance.token, "/api/services/switch/turn_off", {"entity_id": switch})
+            await shows(card, "Internet is working")
+        finally:
+            # Whatever failed, the next checks start on the cable
+            console.cable = True
+            if console.wan_type != "dhcp":
+                await api.post(
+                    instance.token, "/api/services/switch/turn_off", {"entity_id": switch}
+                )
+            console.fails_over = False
+
+            async def on_cable() -> bool:
+                await poll()
+                now = await api.ws(instance.token, {"type": "get_states"})
+                return any(
+                    s["entity_id"] == "sensor.gateway_active_uplink" and s["state"] == "wan"
+                    for s in now["result"]
+                )
+
+            await _until(on_cable, "the traffic back on the cable", 90)
+            await card_page.context.close()
+
+    await checks.run(
+        "the card through a failover to the cellular backup and back, and through a drill",
+        card_through_a_failover,
     )
 
     async def admin_only() -> None:

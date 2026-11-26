@@ -14,6 +14,14 @@ What it is for, for example:
 
 ## Screenshots
 
+The card for every user, in the three sizes its space allows (one, three and six rows of a sections view):
+
+<img src="docs/screenshots/card.png" alt="The card in three sizes: one row with the state, three rows with the connections, six rows with the networks and the mobile data used" width="400">
+
+While the cellular backup carries the traffic, with the guest network that is not assigned to it:
+
+<img src="docs/screenshots/card-backup.png" alt="The card on the backup: running on mobile data with the time it began, the main line disconnected, the mobile backup in use, the guest network disconnected" width="400">
+
 The page, made up for these pictures: the uplinks with the gateway's summary, the cable, the LTE uplink and the LTE backup's data plan:
 
 <img src="docs/screenshots/uplinks.png" alt="Uplinks, Status: the gateway's summary, the main uplink, the LTE uplink and the LTE backup's data plan" width="700">
@@ -132,6 +140,29 @@ The addresses of before (`/network-plus/events`, `/speedtests`, `/drills`, `/upl
 The history is kept by the integration in a store of its own (`.storage/network_plus.history.<entry>`), not in the recorder, for 365 days (option *Keep history*, 1 to 3650 days); backup drills stay. It starts with the installation: nothing from before is shown. Removing the console removes its history.
 
 At the bottom of every page the page shows the version of the integration, also when the data could not be read. The page is built from Home Assistant's own elements and follows its theme, its language (English or German) and the number format of the user's profile, dark mode and phone width. On a narrow screen (Home Assistant's own "narrow", below 870 px, phones and small tablets) the areas move to Home Assistant's bar at the bottom.
+
+### The card
+
+**Network Plus** in the card picker (`custom:network-plus-card`), for every user of the home: whether the internet works, over which connection, and which network is cut off. The page is where administrators look things up; the card is what everybody else sees, in the words of a resident: the uplinks are called by what they are for ("Main line", "Mobile backup", "Second line"), not by their names in UniFi Network. It only reads entities, so it shows nothing a user could not see anyway and has nothing that changes anything; a tap on a row opens Home Assistant's own dialog of that entity. It works without any configuration.
+
+Its parts, from most to least important; each can be switched on or off in the editor:
+
+| Part | What it shows | Default |
+|---|---|---|
+| Overall state | "Internet is working", "Running on mobile data" (or "on the second line") with the time it began, "No internet" while every uplink is down | on |
+| Networks | The networks that lost their internet ("Guest without internet"); the large card lists every network | on |
+| Connections | Every uplink with its state, the one in use marked | on |
+| Names from UniFi Network | The uplinks by their names in UniFi Network instead of "Main line" and "Mobile backup" | off |
+| Mobile data used | The share of the cellular backup's data plan used and the plan, with a bar | on |
+| Response time | The latency on the active uplink | off |
+| Last change | When the active uplink took over | off |
+| Problems | "SIM problem" and "link slower than expected", while they are on | off |
+
+Only what needs someone has a colour: the backup carrying the traffic, an uplink that is down, a network that lost its uplink, the data plan from the console's own warning limit on, no internet. A backup switched on by hand reads "Test: running on mobile data" without a colour, and a network that no uplink would ever carry is not a warning.
+
+The size follows the space. Without rows (a masonry view, or a sections view that leaves the height to the card) the card is as high as what it shows. Given fewer rows, it draws itself large, then medium (state, networks cut off, connections, and the mobile data while the backup carries the traffic, which is the first to go when the room is short), then small (one row: the name and one line, which gives up its end before it is cut off). *Size* fixes one. With more than one console, *Gateway* chooses whose internet the card shows; otherwise it is the first.
+
+Home Assistant loads the card by itself and keeps it in the dashboard resources (created with the first console, removed with the last); resources kept in YAML are left alone, add `/network_plus/network-plus-card.js` as a module there.
 
 ### Admin features (opt-in)
 
@@ -368,14 +399,15 @@ actions:
 
 ### Dashboard
 
-Native cards are enough. The tile for the active uplink shows the uplink's name from UniFi Network and how long it has carried the traffic. The conditional card appears only while the backup is active. The gauge uses the same limits as the automation. The history graph is what the latency sensor is for: one line across failovers, with the uplinks' online state underneath.
+[The card](#the-card) shows the state at a glance. For more, native cards do: the tile for the active uplink shows the uplink's name from UniFi Network, the one below since when it carries the traffic. The conditional card appears only while the backup is active. The gauge uses the same limits as the automation. The history graph is what the latency sensor is for: one line across failovers, with the uplinks' online state underneath.
 
 ```yaml
 - type: tile
   entity: sensor.gateway_active_uplink
   state_content:
     - uplink_name
-    - last_changed
+- type: tile
+  entity: sensor.gateway_active_uplink_since
 - type: tile
   entity: sensor.gateway_internet_latency
 - type: conditional
@@ -468,7 +500,8 @@ Of the gateway:
 |---|---|
 | Binary sensor per uplink, named like the uplink in UniFi Network | Online or offline, as the gateway sees it |
 | Binary sensor "Backup uplink active" | On while another uplink than the preferred one carries the traffic |
-| Sensor "Active uplink" | `wan`, `wan2`, `wan_lte_failover`, …; the attribute `uplink_name` holds the name set in UniFi Network |
+| Sensor "Active uplink" | `wan`, `wan2`, `wan_lte_failover`, …; the attribute `uplink_name` holds the name set in UniFi Network. The attributes `uplinks` (`key`, `name`, `entity_id` of the uplink's binary sensor, `preferred`, `cellular`) and `networks` (`name`, `entity_id` of the network's binary sensor) list what a dashboard would show; an `entity_id` is empty while that sensor is disabled or removed. Both are not recorded |
+| Sensor "Active uplink since" | When the active uplink took over: the last failover or return in the history, or a later switch to or from a cellular backup as the gateway reports it. Unknown while neither knows one. Unlike "last changed", it survives a restart of Home Assistant |
 | Sensor "Internet latency" | Latency on the uplink that carries the traffic, one series across failovers |
 | Event "Internet" | `failover`, `restored`, `brief_failover`, `uplink_down`, `uplink_up`, `public_ip_changed`, `drill_completed` |
 | Binary sensor "<network> Internet", per local network | On while the network reaches the internet over the uplink that carries it now, see [Internet per network](#internet-per-network); attribute `uplinks` |
@@ -568,7 +601,7 @@ The page checks start two made-up consoles (HTTPS on 127.0.0.1 with their own ce
 uv venv --python 3.14 .venv-panel && uv pip install --python .venv-panel/bin/python -r requirements_panel.txt
 ```
 
-They use an installed Google Chrome, otherwise Playwright's Chromium (`.venv-panel/bin/python -m playwright install chromium`). The pictures in this README come from the same run:
+They use an installed Google Chrome, otherwise Playwright's Chromium (`.venv-panel/bin/python -m playwright install chromium`). The same run opens a dashboard with the card as a user without administrator rights. The pictures in this README come from it:
 
 ```bash
 .venv-panel/bin/python -I scripts/panel/check_panel.py --screenshots docs/screenshots

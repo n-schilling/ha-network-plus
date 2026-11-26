@@ -53,6 +53,7 @@ WAN = "binary_sensor.gateway_cable"
 LTE = "binary_sensor.gateway_lte"
 BACKUP = "binary_sensor.gateway_backup_uplink_active"
 ACTIVE = "sensor.gateway_active_uplink"
+SINCE = "sensor.gateway_active_uplink_since"
 EVENT = "event.gateway_internet"
 LATENCY = "sensor.gateway_internet_latency"
 LTE_PERCENT = "sensor.lte_backup_lte_data_used"
@@ -100,7 +101,7 @@ async def test_entities_after_setup(hass: HomeAssistant, setup_entry: MockConfig
         for entry in er.async_entries_for_config_entry(er.async_get(hass), setup_entry.entry_id)
         if entry.domain == "sensor" and entry.unique_id.startswith(MAC)
     )
-    assert sensors == ["active_uplink", "internet_latency"]
+    assert sensors == ["active_uplink", "active_uplink_since", "internet_latency"]
     device = dr.async_get(hass).async_get_device_by_identifier((DOMAIN, MAC), setup_entry.entry_id)
     assert device is not None
     assert (dr.CONNECTION_NETWORK_MAC, MAC) in device.connections
@@ -109,6 +110,83 @@ async def test_entities_after_setup(hass: HomeAssistant, setup_entry: MockConfig
         "UDMPRO",
         "4.0.0",
     )
+
+
+async def test_summary_lists_uplinks_and_networks(
+    hass: HomeAssistant, setup_entry: MockConfigEntry
+) -> None:
+    """The active uplink carries the uplinks and the networks with their entities."""
+    active = hass.states.get(ACTIVE)
+    assert active is not None
+    assert active.attributes["uplinks"] == [
+        {"key": "wan", "name": "Cable", "entity_id": WAN, "preferred": True, "cellular": False},
+        {
+            "key": "wan_lte_failover",
+            "name": "LTE",
+            "entity_id": LTE,
+            "preferred": False,
+            "cellular": True,
+        },
+    ]
+    assert active.attributes["networks"] == [
+        {"name": "Default", "entity_id": LAN_INTERNET},
+        {"name": "Guest", "entity_id": GUEST_INTERNET},
+    ]
+
+    # The lists follow the registry: another entity ID, a disabled and a removed entity
+    registry = er.async_get(hass)
+    registry.async_update_entity(WAN, new_entity_id="binary_sensor.fibre")
+    await hass.async_block_till_done()
+    uplinks = hass.states.get(ACTIVE).attributes["uplinks"]  # type: ignore[union-attr]
+    assert uplinks[0]["entity_id"] == "binary_sensor.fibre"
+    registry.async_update_entity(GUEST_INTERNET, disabled_by=er.RegistryEntryDisabler.USER)
+    await hass.async_block_till_done()
+    networks = hass.states.get(ACTIVE).attributes["networks"]  # type: ignore[union-attr]
+    assert networks[1] == {"name": "Guest", "entity_id": None}
+    registry.async_remove(LTE)
+    await hass.async_block_till_done()
+    uplinks = hass.states.get(ACTIVE).attributes["uplinks"]  # type: ignore[union-attr]
+    assert uplinks[1]["entity_id"] is None
+
+    # Entities of others write nothing; the sensor's own entry is Home Assistant's business
+    before = hass.states.get(ACTIVE)
+    registry.async_get_or_create("binary_sensor", "other", "one")
+    registry.async_get_or_create("sensor", "other", "two")
+    await hass.async_block_till_done()
+    assert hass.states.get(ACTIVE) is before
+    registry.async_update_entity(ACTIVE, icon="mdi:wan")
+    await hass.async_block_till_done()
+    assert hass.states.get(ACTIVE).attributes["uplinks"] == uplinks  # type: ignore[union-attr]
+
+
+async def test_active_uplink_since(
+    hass: HomeAssistant, setup_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """The time of the last switch: the gateway's, or a later one Home Assistant saw."""
+    reported = dt_util.utc_from_timestamp(TRANSITION / 1000)
+    assert _state(hass, SINCE) == reported.isoformat()
+    await console.push(hass, sync(gateway(wan="offline", active="WAN_LTE_FAILOVER")))
+    seen = dt_util.parse_datetime(_state(hass, SINCE))
+    assert seen is not None
+    assert seen > reported
+    # Other events of the history are no switch
+    history = setup_entry.runtime_data.history
+    assert [event["type"] for event in history.events] == ["uplink_down", "failover"]
+    at = dt_util.parse_datetime(history.events[1]["at"])
+    assert at is not None
+    # A timestamp sensor's state has no fractions of a second
+    assert seen == at.replace(microsecond=0)
+
+
+async def test_active_uplink_since_unknown(
+    hass: HomeAssistant, console: FakeConsole, config_entry: MockConfigEntry
+) -> None:
+    """Without a switch in the history and none reported, the time is unknown."""
+    console.set_gateway(gateway(transition=0))
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert _state(hass, SINCE) == STATE_UNKNOWN
 
 
 async def test_websocket_failover(
