@@ -1647,7 +1647,24 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
                 f"the uplink switched off for the drill: {found['Main line']}",
             )
             expect(found["Guest"] == ("Disconnected", True), f"the guests: {found['Guest']}")
+            # Switched on again, the uplink takes its time: still the test, and no warning
+            console.cable = False
             await api.post(instance.token, "/api/services/switch/turn_off", {"entity_id": switch})
+            await poll()
+            await card_page.wait_for_timeout(12000)
+            await poll()
+            await card_page.wait_for_timeout(2000)
+            pill = (await card.locator(".pill").inner_text()).strip()
+            expect(
+                pill.startswith("Test: running on mobile data"),
+                f"the uplink on its way back after a drill: {pill}",
+            )
+            expect(
+                "warning" not in str(await card.locator(".head").get_attribute("class")),
+                "the way back from a drill as a warning",
+            )
+            console.cable = True
+            console.switch()
             await shows(card, "Internet is working")
         finally:
             # Whatever failed, the next checks start on the cable

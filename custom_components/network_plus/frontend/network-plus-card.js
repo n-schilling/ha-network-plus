@@ -293,7 +293,8 @@
         active,
         since: states("active_uplink_since").find(known),
         backup: states("backup_active")[0]?.state === "on",
-        enforced: states("enforce_backup")[0]?.state === "on",
+        // On purpose: the switch is on, or the uplink it switched off is on its way back
+        enforced: states("enforce_backup")[0]?.state === "on" || states("backup_active")[0]?.attributes.drill === true,
         latency: states("internet_latency").find(known),
         uplinks: listed("uplinks").map(withState).filter((item) => item.state),
         networks: listed("networks").map(withState).filter((item) => item.state),

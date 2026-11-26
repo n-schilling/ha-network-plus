@@ -4,6 +4,12 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-11-26
+
+### Fixed
+
+- The card showed a warning ("Running on mobile data") for up to two minutes after a drill: the switch was off again, the gateway not yet back on the preferred uplink. The binary sensor "Backup uplink active" now has the attribute `drill`, true from the switch turning the preferred uplink off until the gateway routes over it again, and the card reads "Test: running on mobile data" without a colour that long. A backup that carries on more than five minutes after the switch-back counts as an outage.
+
 ## [0.15.0] - 2026-11-26
 
 ### Added

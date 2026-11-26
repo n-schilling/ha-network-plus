@@ -42,6 +42,7 @@ from custom_components.network_plus.const import (
     CONF_ENFORCED_WAN_TYPE,
     CONF_LTE_BILLING_DAY,
     CONF_LTE_LIMIT_PERCENT,
+    DRILL_RETURN_GRACE,
     EVENT_DRILL,
 )
 
@@ -54,6 +55,9 @@ EVENT = "event.gateway_internet"
 async def _turn(hass: HomeAssistant, service: str) -> None:
     await hass.services.async_call(SWITCH_DOMAIN, service, {ATTR_ENTITY_ID: SWITCH}, blocking=True)
     await hass.async_block_till_done()
+
+
+BACKUP = "binary_sensor.gateway_backup_uplink_active"
 
 
 async def _poll(hass: HomeAssistant, entry: MockConfigEntry) -> None:
@@ -309,6 +313,7 @@ async def test_drill_protocol(
     await console.push(hass, sync(failed_over))
     assert coordinator.drill.failover_seconds == 15.0  # type: ignore[union-attr]
     assert coordinator.drill.restore_seconds is None  # type: ignore[union-attr]
+    assert hass.states.get(BACKUP).attributes["drill"] is True  # type: ignore[union-attr]
     # Data flows over LTE meanwhile
     console.devices[2] = lte_device(rx=2_000_000, tx=500_000)
     await _poll(hass, setup_admin_entry)
@@ -316,6 +321,10 @@ async def test_drill_protocol(
     freezer.tick(timedelta(seconds=60))
     await _turn(hass, SERVICE_TURN_OFF)
     assert setup_admin_entry.data[CONF_DRILL]["ended_at"] == dt_util.utcnow().isoformat()
+    # The uplink is on its way back: still on purpose
+    await _poll(hass, setup_admin_entry)
+    assert hass.states.get(BACKUP).state == "on"  # type: ignore[union-attr]
+    assert hass.states.get(BACKUP).attributes["drill"] is True  # type: ignore[union-attr]
     freezer.tick(timedelta(seconds=12))
     back = gateway(transition=TRANSITION + 2000)
     console.set_gateway(back)
@@ -347,6 +356,42 @@ async def test_drill_protocol(
     await console.push(hass, sync(back))
     await hass.async_block_till_done()
     assert len(events) == 1
+
+
+async def test_backup_that_outlasts_a_drill_is_no_drill(
+    hass: HomeAssistant,
+    setup_admin_entry: MockConfigEntry,
+    console: FakeConsole,
+    freezer: FrozenDateTimeFactory,
+) -> None:
+    """A backup that carries on long after the switch-back is an outage, not a drill."""
+    assert hass.states.get(BACKUP).attributes["drill"] is False  # type: ignore[union-attr]
+    await _turn(hass, SERVICE_TURN_ON)
+    failed_over = gateway(wan="offline", active="WAN_LTE_FAILOVER", transition=TRANSITION + 1000)
+    console.set_gateway(failed_over)
+    await console.push(hass, sync(failed_over))
+    freezer.tick(timedelta(seconds=30))
+    await _turn(hass, SERVICE_TURN_OFF)
+    freezer.tick(DRILL_RETURN_GRACE - timedelta(seconds=1))
+    await _poll(hass, setup_admin_entry)
+    assert hass.states.get(BACKUP).attributes["drill"] is True  # type: ignore[union-attr]
+    freezer.tick(timedelta(seconds=1))
+    await _poll(hass, setup_admin_entry)
+    assert hass.states.get(BACKUP).state == "on"  # type: ignore[union-attr]
+    assert hass.states.get(BACKUP).attributes["drill"] is False  # type: ignore[union-attr]
+
+
+async def test_failover_after_a_drill_without_failover_is_no_drill(
+    hass: HomeAssistant, setup_admin_entry: MockConfigEntry, console: FakeConsole
+) -> None:
+    """Switched back before the gateway left the uplink: an outage right after is an outage."""
+    await _turn(hass, SERVICE_TURN_ON)
+    await _turn(hass, SERVICE_TURN_OFF)
+    failed_over = gateway(wan="offline", active="WAN_LTE_FAILOVER", transition=TRANSITION + 1000)
+    console.set_gateway(failed_over)
+    await console.push(hass, sync(failed_over))
+    assert hass.states.get(BACKUP).state == "on"  # type: ignore[union-attr]
+    assert hass.states.get(BACKUP).attributes["drill"] is False  # type: ignore[union-attr]
 
 
 async def test_drill_back_before_the_switch_back(

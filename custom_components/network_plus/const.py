@@ -75,6 +75,11 @@ CONF_DRILL: Final = "drill"
 # entry: the gateway names the interface only for a while after the test
 CONF_SPEEDTEST_UPLINK: Final = "speedtest_uplink"
 
+# After the switch turned the preferred uplink on again, the gateway takes up to
+# two minutes to route over it (live: 15 to 100 s). That long the backup still
+# counts as switched on on purpose; a backup that carries on after it does not
+DRILL_RETURN_GRACE: Final = timedelta(minutes=5)
+
 # Events on the bus for every finished speed test and every completed backup
 # drill; the logbook describes them, the page keeps them in its history
 EVENT_SPEEDTEST: Final = "network_plus_speedtest"

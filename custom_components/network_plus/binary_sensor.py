@@ -89,7 +89,12 @@ class UplinkOnlineSensor(UplinkEntity, BinarySensorEntity):
 
 
 class BackupActiveSensor(NetworkPlusEntity, BinarySensorEntity):
-    """On while the traffic runs over another uplink than the preferred one."""
+    """On while the traffic runs over another uplink than the preferred one.
+
+    The attribute ``drill`` tells a backup switched on on purpose from an
+    outage: true from the switch turning the preferred uplink off until the
+    gateway routes over it again, also while the uplink is on its way back.
+    """
 
     _attr_translation_key = "backup_active"
 
@@ -101,6 +106,11 @@ class BackupActiveSensor(NetworkPlusEntity, BinarySensorEntity):
     def is_on(self) -> bool | None:
         """Return whether a backup uplink carries the traffic."""
         return self.coordinator.data.backup_active
+
+    @property
+    def extra_state_attributes(self) -> dict[str, bool]:
+        """Return whether the backup carries the traffic on purpose."""
+        return {"drill": bool(self.is_on) and self.coordinator.drill_running}
 
 
 class UplinkLinkDegradedSensor(UplinkEntity, BinarySensorEntity):

@@ -158,7 +158,7 @@ Its parts, from most to least important; each can be switched on or off in the e
 | Last change | When the active uplink took over | off |
 | Problems | "SIM problem" and "link slower than expected", while they are on | off |
 
-Only what needs someone has a colour: the backup carrying the traffic, an uplink that is down, a network that lost its uplink, the data plan from the console's own warning limit on, no internet. A backup switched on by hand reads "Test: running on mobile data" without a colour, and a network that no uplink would ever carry is not a warning.
+Only what needs someone has a colour: the backup carrying the traffic, an uplink that is down, a network that lost its uplink, the data plan from the console's own warning limit on, no internet. A backup switched on by hand reads "Test: running on mobile data" without a colour, until the preferred uplink carries the traffic again, and a network that no uplink would ever carry is not a warning.
 
 The size follows the space. Without rows (a masonry view, or a sections view that leaves the height to the card) the card is as high as what it shows. Given fewer rows, it draws itself large, then medium (state, networks cut off, connections, and the mobile data while the backup carries the traffic, which is the first to go when the room is short), then small (one row: the name and one line, which gives up its end before it is cut off). *Size* fixes one. With more than one console, *Gateway* chooses whose internet the card shows; otherwise it is the first.
 
@@ -499,7 +499,7 @@ Of the gateway:
 | Entity | What it shows |
 |---|---|
 | Binary sensor per uplink, named like the uplink in UniFi Network | Online or offline, as the gateway sees it |
-| Binary sensor "Backup uplink active" | On while another uplink than the preferred one carries the traffic |
+| Binary sensor "Backup uplink active" | On while another uplink than the preferred one carries the traffic. The attribute `drill` is true while that is on purpose: from "Enforce backup uplink" switching the preferred uplink off until the gateway routes over it again, also while the uplink is on its way back (at most five minutes after the switch-back) |
 | Sensor "Active uplink" | `wan`, `wan2`, `wan_lte_failover`, …; the attribute `uplink_name` holds the name set in UniFi Network. The attributes `uplinks` (`key`, `name`, `entity_id` of the uplink's binary sensor, `preferred`, `cellular`) and `networks` (`name`, `entity_id` of the network's binary sensor) list what a dashboard would show; an `entity_id` is empty while that sensor is disabled or removed. Both are not recorded |
 | Sensor "Active uplink since" | When the active uplink took over: the last failover or return in the history, or a later switch to or from a cellular backup as the gateway reports it. Unknown while neither knows one. Unlike "last changed", it survives a restart of Home Assistant |
 | Sensor "Internet latency" | Latency on the uplink that carries the traffic, one series across failovers |

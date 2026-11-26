@@ -50,6 +50,7 @@ from .const import (
     DEFAULT_LTE_BILLING_DAY,
     DEFAULT_LTE_LIMIT_PERCENT,
     DOMAIN,
+    DRILL_RETURN_GRACE,
     EVENT_DRILL,
     EVENT_SPEEDTEST,
     FAILOVER_TIMEOUT,
@@ -865,6 +866,26 @@ class NetworkCoordinator(DataUpdateCoordinator[NetworkState]):
             self._delete_issue(ISSUE_ADMIN)
         else:
             self._create_issue(ISSUE_ADMIN, {"reason": reason})
+
+    @property
+    def drill_running(self) -> bool:
+        """Return whether the preferred uplink is off on purpose, or on its way back.
+
+        From the switch turning it off until the gateway routes over it again.
+        A drill whose return was never seen ends after ``DRILL_RETURN_GRACE``,
+        and one that was switched back before the gateway ever left the
+        preferred uplink has nothing to return from: a failover after either
+        is not taken for a drill.
+        """
+        drill = self.drill
+        if drill is None or drill.completed:
+            return False
+        if drill.ended_at is None:
+            return True
+        # A failover noted after the switch-back did not come from the switch
+        if drill.failover_at is None or drill.failover_at >= drill.ended_at:
+            return False
+        return dt_util.utcnow() - drill.ended_at < DRILL_RETURN_GRACE
 
     @callback
     def start_drill(self) -> None:
