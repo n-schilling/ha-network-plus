@@ -4,6 +4,20 @@ All notable changes are listed here. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-26
+
+### Fixed
+
+- The card's editor showed every part that is on by default as off until it was switched once, because Home Assistant's own editor only knows what is written in the configuration. The card now brings its own editor, which shows what the card does and writes only what differs from the defaults.
+
+### Changed
+
+- The stored history has a format version (1.2) and is migrated when it is loaded, instead of code that took care of older entries on every poll. A remote session from before 0.14.0 that had ended stays in the history. One that was still open is dropped: without the client's key it cannot be told from another client of the same name, and a client that is still connected gets its session anew, from the start the console tells. An earlier version of the integration still reads the migrated store.
+- The manifest names the integration's categories (routers and network, monitoring) and how it reaches the console (network), the fields Home Assistant and the Marketplace sort integrations by.
+- Removing the last console stops loading the card's script on the pages of Home Assistant at once, no longer only after the next restart. A page that is open keeps the card it loaded.
+- The card takes its font sizes and weights from Home Assistant's own variables instead of fixed pixels, so it follows a theme or a font scale set there.
+- Home Assistant's classes and constants are imported from where it publishes them, not from its inner modules, and the page no longer sets a size variable Home Assistant's buttons stopped reading. Nothing changes in what the integration does or shows.
+
 ## [0.15.1] - 2026-11-26
 
 ### Fixed

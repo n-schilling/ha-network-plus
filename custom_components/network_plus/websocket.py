@@ -12,9 +12,12 @@ from typing import Any
 
 import probatio
 
-from homeassistant.components.websocket_api import async_register_command
-from homeassistant.components.websocket_api.connection import ActiveConnection
-from homeassistant.components.websocket_api.decorators import require_admin, websocket_command
+from homeassistant.components.websocket_api import (
+    ActiveConnection,
+    async_register_command,
+    require_admin,
+    websocket_command,
+)
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.loader import async_get_integration

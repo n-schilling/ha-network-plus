@@ -10,11 +10,12 @@ import re
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.typing import WebSocketGenerator
 
-from homeassistant.components.frontend import DATA_PANELS
+from homeassistant.components.frontend import DATA_EXTRA_MODULE_URL, DATA_PANELS
 from homeassistant.core import HomeAssistant
 
 from custom_components.network_plus.api import NetworkError
 from custom_components.network_plus.const import DOMAIN, PANEL_URL_PATH
+from custom_components.network_plus.frontend import DATA_CARD
 
 from .conftest import ADMIN_DATA, ENTRY_DATA, MAC, FakeConsole, gateway, lte_device
 
@@ -197,6 +198,37 @@ async def test_panel_stays_through_a_reload_and_goes_with_the_last_console(
     await hass.config_entries.async_remove(second.entry_id)
     await hass.async_block_till_done()
     assert PANEL_URL_PATH not in hass.data[DATA_PANELS]
+
+
+async def test_card_is_loaded_until_the_last_console_goes(
+    hass: HomeAssistant, console: FakeConsole
+) -> None:
+    """The card's script is loaded once and no longer after the last console is removed."""
+    loaded: set[str] = set()
+    hass.data[DATA_EXTRA_MODULE_URL] = loaded  # type: ignore[assignment]
+    console.devices.append({**gateway(), "mac": "02:00:00:00:00:09"})
+    first = MockConfigEntry(domain=DOMAIN, title="Gateway", unique_id=MAC, data=ENTRY_DATA)
+    second = MockConfigEntry(
+        domain=DOMAIN, title="Other", unique_id="02:00:00:00:00:09", data=ENTRY_DATA
+    )
+    for entry in (first, second):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    url = hass.data[DATA_CARD]
+    assert loaded == {url}
+    await hass.config_entries.async_remove(first.entry_id)
+    await hass.async_block_till_done()
+    assert loaded == {url}
+    await hass.config_entries.async_remove(second.entry_id)
+    await hass.async_block_till_done()
+    assert loaded == set()
+    # A console added again loads it again
+    again = MockConfigEntry(domain=DOMAIN, title="Gateway", unique_id=MAC, data=ENTRY_DATA)
+    again.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(again.entry_id)
+    await hass.async_block_till_done()
+    assert loaded == {url}
 
 
 def _version() -> str:

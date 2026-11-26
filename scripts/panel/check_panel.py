@@ -1458,6 +1458,32 @@ async def check_page(browser: Browser, instance: Instance, api: Api, shots: Path
                 not set(offered["fields"]) & set(offered["labels"]),
                 f"an editor field without its text: {offered['labels']}",
             )
+            # The editor shows what the card does (the defaults, where the configuration
+            # says nothing) and writes only what differs from them
+            edited = await card_page.evaluate(
+                f"""() => {{
+                  const editor = customElements.get('{CARD}').getConfigElement();
+                  editor.hass = document.querySelector('home-assistant').hass;
+                  editor.setConfig({{ type: 'custom:{CARD}' }});
+                  const form = editor.querySelector('ha-form');
+                  const shown = {{ ...form.data }};
+                  let config = null;
+                  editor.addEventListener('config-changed', (e) => {{ config = e.detail.config; }});
+                  form.dispatchEvent(new CustomEvent('value-changed', {{
+                    detail: {{ value: {{ ...shown, show_status: false, show_latency: true }} }},
+                  }}));
+                  return {{ shown, config }};
+                }}"""
+            )
+            expect(
+                edited["shown"]["show_status"] is True and edited["shown"]["show_latency"] is False,
+                f"the editor does not show the defaults: {edited['shown']}",
+            )
+            expect(
+                edited["config"]
+                == {"type": f"custom:{CARD}", "show_status": False, "show_latency": True},
+                f"the editor wrote {edited['config']}",
+            )
             # What does not fit is left out: one row, three rows, six rows
             cards = await card_at(card_page, "sizes")
             small, medium, large = cards.nth(0), cards.nth(1), cards.nth(2)

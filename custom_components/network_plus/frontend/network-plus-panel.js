@@ -842,7 +842,7 @@ if (!customElements.get("network-plus-panel")) {
     .card-header ha-icon-button.help { margin-inline-start: auto; }
     .card-content { padding: 0 16px 16px; }
     .card-content.top { padding-top: 16px; }
-    ha-icon-button.help { --mdc-icon-button-size: 32px; --mdc-icon-size: 18px; --ha-icon-button-size: 32px; color: var(--secondary-text-color); flex: none; }
+    ha-icon-button.help { --mdc-icon-size: 18px; --ha-icon-button-size: 32px; color: var(--secondary-text-color); flex: none; }
     ha-tooltip { --max-width: min(360px, 90vw); }
     .alertact { display: flex; align-items: center; gap: 4px; }
     /* Name and version at the bottom, centred */

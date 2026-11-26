@@ -320,36 +320,67 @@ async def test_remote_sessions_of_the_same_name(
     assert [s["until"] is None for s in history.sessions] == [False, False, True]
 
 
-async def test_old_session_without_a_match_closes(
+async def test_store_of_before_session_keys_is_migrated(
     hass: HomeAssistant,
-    setup_entry: MockConfigEntry,
     console: FakeConsole,
-    freezer: FrozenDateTimeFactory,
+    config_entry: MockConfigEntry,
+    hass_storage: dict[str, Any],
 ) -> None:
-    """An open session from before keys were kept closes if two clients carry its name."""
-    history = _history(setup_entry)
-    for session in history.sessions:
-        session.pop("key", None)
-    console.clients = [teleport_client(client_id="a"), teleport_client(client_id="b")]
-    freezer.tick(timedelta(minutes=1))
-    await _poll(hass, setup_entry)
-    assert history.sessions[0]["until"] is not None
-    assert [s["until"] for s in history.sessions[1:]] == [None, None]
+    """A store of minor version 1: ended sessions stay, open ones without a key go."""
+    now = dt_util.utcnow()
+    at = (now - timedelta(days=2)).isoformat()
+    until = (now - timedelta(days=1)).isoformat()
+    key = storage_key(config_entry.entry_id)
+    hass_storage[key] = {
+        "version": 1,
+        "minor_version": 1,
+        "key": key,
+        "data": {
+            "events": [{"at": at, "type": "failover"}],
+            "speedtests": [],
+            "drills": [],
+            "sessions": [
+                {"at": at, "until": until, "type": "TELEPORT", "name": "Tablet"},
+                {"at": at, "until": None, "type": "TELEPORT", "name": "Phone"},
+                {"at": at, "until": None, "type": "TELEPORT", "name": "Laptop", "key": "c-9"},
+                "x",
+            ],
+        },
+    }
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    stored = hass_storage[key]
+    assert (stored["version"], stored["minor_version"]) == (1, 2)
+    history = _history(config_entry)
+    assert history.events == [{"at": at, "type": "failover"}]
+    by_name = {session["name"]: session for session in history.sessions}
+    # The ended session keeps its place; the open one of before is gone, and the
+    # client that is connected (the console's "Phone") has its session anew
+    assert by_name["Tablet"] == {
+        "at": at,
+        "until": until,
+        "type": "TELEPORT",
+        "name": "Tablet",
+        "key": "",
+    }
+    assert by_name["Phone"]["at"] != at
+    assert by_name["Phone"]["until"] is None and by_name["Phone"]["key"]
+    # The client of the keyed session is not connected: it closes as ever
+    assert by_name["Laptop"]["until"] is not None
 
 
-async def test_old_session_goes_to_its_client(
+async def test_store_without_sessions_is_migrated(
     hass: HomeAssistant,
-    setup_entry: MockConfigEntry,
     console: FakeConsole,
-    freezer: FrozenDateTimeFactory,
+    config_entry: MockConfigEntry,
+    hass_storage: dict[str, Any],
 ) -> None:
-    """An open session from before keys were kept stays open for the one client it names."""
-    history = _history(setup_entry)
-    for session in history.sessions:
-        session.pop("key", None)
-    console.clients = [teleport_client(client_id="a")]
-    freezer.tick(timedelta(minutes=1))
-    await _poll(hass, setup_entry)
-    assert len(history.sessions) == 1
-    assert history.sessions[0]["until"] is None
-    assert history.sessions[0]["key"]
+    """A store of minor version 1 whose sessions are no list starts them empty."""
+    key = storage_key(config_entry.entry_id)
+    hass_storage[key] = {"version": 1, "minor_version": 1, "key": key, "data": {"sessions": 1}}
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass_storage[key]["minor_version"] == 2
+    assert [s["name"] for s in _history(config_entry).sessions] == ["Phone"]

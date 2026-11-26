@@ -61,10 +61,28 @@ async def test_card_loaded_and_resource_created(hass: HomeAssistant) -> None:
     collection.async_create_item.assert_awaited_once_with({"res_type": "module", "url": url})
     collection.async_update_item.assert_not_awaited()
 
-    # Loaded once per run: a second setup adds nothing to the pages
+    # Loaded once: a second setup adds nothing to the pages
     with patch(f"{frontend.__name__}.add_extra_js_url") as add_url:
         await frontend.async_register_card(hass)
     add_url.assert_not_called()
+
+
+async def test_card_unloaded_and_loaded_again(hass: HomeAssistant) -> None:
+    """Removing the last entry takes the script off the pages; a new entry loads it again."""
+    assert await async_setup_component(hass, "http", {})
+    loaded: set[str] = set()
+    hass.data[DATA_EXTRA_MODULE_URL] = loaded  # type: ignore[assignment]
+    await frontend.async_register_card(hass)
+    url = hass.data[DATA_CARD]
+    assert loaded == {url}
+
+    frontend.async_unload_card(hass)
+    assert loaded == set()
+    # Nothing to take back a second time
+    frontend.async_unload_card(hass)
+
+    await frontend.async_register_card(hass)
+    assert loaded == {url}
 
 
 async def test_card_resource_updated_and_removed(hass: HomeAssistant) -> None:
@@ -143,6 +161,10 @@ def test_card_reads_and_calls_only_what_is_listed() -> None:
     subscribed = re.findall(r'subscribeMessage\([^;]*?\{ type: "([^"]+)" \}', code, re.DOTALL)
     assert code.count("subscribeMessage(") == len(subscribed)
     assert set(subscribed) == SUBSCRIPTIONS
+    # The editor fills in the defaults: Home Assistant's own form editor would show
+    # an option that is not in the configuration as off
+    assert "static getConfigElement()" in card
+    assert "{ ...DEFAULTS, ...this._config }" in card
     # Every option the card reads has a field in its editor
     options = set(re.findall(r"\bc\.(\w+)", card))
     for option in options - {"title", "size"}:

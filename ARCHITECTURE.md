@@ -217,8 +217,9 @@ poll (60 s) ─────────────▶ NetworkCoordinator._async
   coordinator update (a client that appears opens a session, one that leaves
   closes it; an unknown list changes nothing). Sessions are told apart by a
   hash of the console's client ID (by name if there is none), stored with
-  the session but not handed to the page; open sessions from before keys
-  were kept go to the one client of their type and name. Saved 10 s after a change and
+  the session but not handed to the page. The store has a version (1.2);
+  a store of before keys were kept (1.1) is migrated when it is loaded:
+  ended sessions stay, open ones without a key go. Saved 10 s after a change and
   on unload; entries older than the option *Keep history* (365 days) go,
   drills and open sessions stay.
 - The page is plain JavaScript without a build step, one file, built as

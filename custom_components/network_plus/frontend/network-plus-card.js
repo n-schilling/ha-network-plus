@@ -11,6 +11,7 @@
 (() => {
   const DOMAIN = "network_plus";
   const TAG = "network-plus-card";
+  const EDITOR = `${TAG}-editor`;
   // The card from most to least: what does not fit is left out in this order
   const SIZES = ["large", "medium", "small"];
   // By the space the card gets, the medium card first gives up the backup's data
@@ -144,17 +145,17 @@
     .head ha-icon, .small ha-icon { color: var(--secondary-text-color); --mdc-icon-size: 20px; flex: none; }
     .warning ha-icon.state, .line.warning { color: var(--warning-color); }
     .error ha-icon.state { color: var(--error-color); }
-    .title { flex: 1; font-size: 16px; font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .pill { font-size: 12px; padding: 2px 10px; border-radius: 999px; white-space: nowrap;
+    .title { flex: 1; font-size: var(--ha-font-size-l); font-weight: var(--ha-font-weight-medium); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pill { font-size: var(--ha-font-size-s); padding: 2px 10px; border-radius: 999px; white-space: nowrap;
       background: rgba(var(--rgb-primary-text-color), 0.06); color: var(--secondary-text-color); }
     .warning .pill { background: rgba(var(--rgb-warning-color), 0.15); color: var(--primary-text-color); }
     .error .pill { background: rgba(var(--rgb-error-color), 0.15); color: var(--primary-text-color); }
     .label { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--divider-color);
-      font-size: 12px; color: var(--secondary-text-color); }
-    .row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 14px; }
+      font-size: var(--ha-font-size-s); color: var(--secondary-text-color); }
+    .row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: var(--ha-font-size-m); }
     .row[data-entity] { cursor: pointer; }
     .row .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .row .tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+    .row .tag { font-size: var(--ha-font-size-xs); padding: 1px 8px; border-radius: 999px; white-space: nowrap;
       background: rgba(var(--rgb-primary-color), 0.15); }
     .row .value { margin-left: auto; padding-left: 8px; white-space: nowrap; color: var(--secondary-text-color); }
     .row .value.warning { color: var(--warning-color); }
@@ -163,18 +164,24 @@
     .bar { height: 4px; border-radius: 2px; margin: 0 0 2px; background: rgba(var(--rgb-primary-text-color), 0.1); overflow: hidden; }
     .bar div { height: 100%; background: var(--primary-color); }
     .bar.warning div { background: var(--warning-color); }
-    .line { display: flex; align-items: center; margin-top: 10px; font-size: 13px; }
+    .line { display: flex; align-items: center; margin-top: 10px; font-size: var(--ha-font-size-s); }
     .line ha-icon { --mdc-icon-size: 16px; margin-right: 6px; flex: none; }
     .small { display: flex; align-items: center; gap: 10px; height: 100%; }
     .who { flex: 1; min-width: 0; }
-    .small .name { font-size: 14px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .small .sub { font-size: 12px; color: var(--secondary-text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .missing { color: var(--secondary-text-color); font-size: 14px; }
+    .small .name { font-size: var(--ha-font-size-m); font-weight: var(--ha-font-weight-medium); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .small .sub { font-size: var(--ha-font-size-s); color: var(--secondary-text-color); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .missing { color: var(--secondary-text-color); font-size: var(--ha-font-size-m); }
   `;
 
   class Card extends HTMLElement {
     static getStubConfig() {
       return {};
+    }
+
+    // Home Assistant's own editor for a form gets the stored configuration alone and
+    // shows an option that is not in it as off; this one shows what the card does
+    static getConfigElement() {
+      return document.createElement(EDITOR);
     }
 
     // A field for every option, the parts in one expandable group
@@ -493,7 +500,48 @@
     }
   }
 
+  // Home Assistant's form over the card's schema, with the defaults filled in. Only
+  // what differs from a default is written to the configuration
+  class Editor extends HTMLElement {
+    setConfig(config) {
+      this._config = { ...config };
+      this._render();
+    }
+
+    set hass(hass) {
+      this._hass = hass;
+      language = hass?.language || language;
+      this._render();
+    }
+
+    _render() {
+      if (!this._hass || !this._config) return;
+      if (!this._form) {
+        this._form = document.createElement("ha-form");
+        this._form.addEventListener("value-changed", (event) => {
+          event.stopPropagation();
+          const value = { ...event.detail.value };
+          for (const [name, usual] of Object.entries(DEFAULTS)) if (value[name] === usual) delete value[name];
+          if (!value.title) delete value.title;
+          if (!value.device) delete value.device;
+          this._config = value;
+          this.dispatchEvent(new CustomEvent("config-changed", { detail: { config: value }, bubbles: true, composed: true }));
+        });
+        this.appendChild(this._form);
+      }
+      if (this._language !== language) {
+        this._language = language;
+        const form = Card.getConfigForm();
+        this._form.schema = form.schema;
+        this._form.computeLabel = form.computeLabel;
+      }
+      this._form.hass = this._hass;
+      this._form.data = { ...DEFAULTS, ...this._config };
+    }
+  }
+
   if (!customElements.get(TAG)) customElements.define(TAG, Card);
+  if (!customElements.get(EDITOR)) customElements.define(EDITOR, Editor);
   window.customCards = window.customCards || [];
   if (!window.customCards.some((card) => card.type === TAG)) {
     window.customCards.push({ type: TAG, name: TEXTS.en.name, description: TEXTS.en.description, preview: true });

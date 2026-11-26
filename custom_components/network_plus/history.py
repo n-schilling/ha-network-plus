@@ -30,6 +30,10 @@ from .model import (
 )
 
 STORAGE_VERSION = 1
+# 2: every remote session carries the key of its client (since 0.14.0)
+STORAGE_MINOR_VERSION = 2
+# What a remote session holds; one without them is not kept
+SESSION_FIELDS = frozenset({"until", "type", "name", "key"})
 
 # What an event of the "Internet" entity keeps in the history; the addresses
 # of a changed public IP stay out, the page names only the uplink and the family
@@ -50,6 +54,27 @@ def storage_key(entry_id: str) -> str:
     return HISTORY_STORAGE_KEY.format(entry_id=entry_id)
 
 
+class HistoryStore(Store[dict[str, Any]]):
+    """The store of one console, with the migration from the minor version before."""
+
+    async def _async_migrate_func(
+        self, old_major_version: int, old_minor_version: int, old_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        if old_major_version == 1 and old_minor_version < 2:
+            # Sessions knew only the type and the name of their client. One that
+            # ended keeps its place in the history. One still open cannot be told
+            # from another client of the same name: it goes, and a client that is
+            # still connected gets its session anew, from the start the console tells
+            sessions = old_data.get("sessions")
+            old_data["sessions"] = [
+                session if "key" in session else {**session, "key": ""}
+                for session in (sessions if isinstance(sessions, list) else [])
+                if isinstance(session, dict)
+                and ("key" in session or session.get("until") is not None)
+            ]
+        return old_data
+
+
 class History:
     """Switches, speed tests, drills and remote sessions of one console."""
 
@@ -58,7 +83,9 @@ class History:
         self.hass = hass
         self.entry_id = entry_id
         self.days = days
-        self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, storage_key(entry_id))
+        self._store = HistoryStore(
+            hass, STORAGE_VERSION, storage_key(entry_id), minor_version=STORAGE_MINOR_VERSION
+        )
         self.events: list[dict[str, Any]] = []
         self.speedtests: list[dict[str, Any]] = []
         self.drills: list[dict[str, Any]] = []
@@ -75,7 +102,7 @@ class History:
             value = data.get(name)
             items = [item for item in value if _valid(item)] if isinstance(value, list) else []
             setattr(self, name, items)
-        self.sessions = [s for s in self.sessions if {"until", "type", "name"} <= s.keys()]
+        self.sessions = [s for s in self.sessions if s.keys() >= SESSION_FIELDS]
         self._prune()
 
     @callback
@@ -149,16 +176,12 @@ class History:
         for session in self.sessions:
             if session["until"] is not None:
                 continue
-            key = session.get("key") or _legacy_key(session, current)
-            if key in current:
-                if session.get("key") != key:
-                    session["key"] = key
-                    changed = True
+            if (key := session["key"]) in current:
                 self._note_bytes(session, current[key])
             else:
                 session["until"] = now
                 changed = True
-        open_keys = {s.get("key") for s in self.sessions if s["until"] is None}
+        open_keys = {s["key"] for s in self.sessions if s["until"] is None}
         for key, client in current.items():
             if key not in open_keys:
                 since = client.since.isoformat() if client.since else now
@@ -256,17 +279,3 @@ def _at(item: dict[str, Any]) -> datetime:
 
 def _now() -> str:
     return dt_util.utcnow().isoformat()
-
-
-def _legacy_key(session: dict[str, Any], current: dict[str, VpnClient]) -> str | None:
-    """Return the key of the client an open session from before keys were kept belongs to.
-
-    Such a session knows only type and name; it goes to the one client with
-    both, else it is over.
-    """
-    matches = [
-        key
-        for key, client in current.items()
-        if client.type == session.get("type") and client.name == session.get("name")
-    ]
-    return matches[0] if len(matches) == 1 else None

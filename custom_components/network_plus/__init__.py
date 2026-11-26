@@ -36,6 +36,7 @@ from .frontend import (
     async_register_card,
     async_register_frontend,
     async_remove_card_resource,
+    async_unload_card,
     async_unregister_panel,
 )
 from .history import History
@@ -165,6 +166,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: NetworkConfigEntry) -> 
     await History(hass, entry.entry_id, DEFAULT_HISTORY_DAYS).async_remove()
     if not hass.config_entries.async_entries(DOMAIN):
         async_unregister_panel(hass)
+        async_unload_card(hass)
         await async_remove_card_resource(hass)
     registry = ir.async_get(hass)
     for domain, issue_id in list(registry.issues):
